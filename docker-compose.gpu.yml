@@ -1,0 +1,19 @@
+# Override file to enable NVIDIA Container Toolkit GPU acceleration (8 GB VRAM optimized).
+# Usage: docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d
+
+services:
+  backend:
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=compute,utility
+      - SKYOBSERVER_DEVICE=cuda
+      - SKYOBSERVER_MAX_GPU_MEMORY_FRACTION=0.85
+    deploy:
+      resources:
+        limits:
+          memory: 12G
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]

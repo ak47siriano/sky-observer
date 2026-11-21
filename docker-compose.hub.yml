@@ -1,0 +1,34 @@
+services:
+  sky-observer:
+    image: ${DOCKERHUB_IMAGE:-sky-observer:latest}
+    container_name: sky-observer
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    environment:
+      - SKYOBSERVER_ENV=production
+      - SKYOBSERVER_DEVICE=auto
+      - SKYOBSERVER_DATA_DIR=/data
+      - SKYOBSERVER_CONFIG_PATH=/config/config.yaml
+    volumes:
+      - ./data:/data
+      - ./config:/config
+    labels:
+      - "com.centurylinklabs.watchtower.enable=true"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8080/api/system/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
+  # Aggiornamento automatico continuo in sync da Docker Hub:
+  # controlla ogni 300 secondi (5 min) se c'e una nuova versione di :latest su Docker Hub,
+  # la scarica e riavvia sky-observer mantenendo intatti database, foto, modelli e config.
+  watchtower:
+    image: containrrr/watchtower:latest
+    container_name: sky-observer-watchtower
+    restart: unless-stopped
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    command: --interval 300 --cleanup --label-enable

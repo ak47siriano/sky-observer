@@ -1,0 +1,607 @@
+"""Local Auto-Labeling & Warm-Start Auto-Training Engine for site-specific model reinforcement."""
+
+from __future__ import annotations
+
+import json
+import threading
+import time
+from datetime import datetime, UTC
+from pathlib import Path
+from typing import Any
+
+import cv2
+import numpy as np
+from sqlalchemy.orm import Session
+
+from app.ai.datasets import _assign_group_splits, bootstrap_local_sky_dataset
+from app.ai.trainer import get_training_manager
+from app.config import AppConfig, get_config_manager
+from app.database import get_db_session
+from app.models_db import DatasetItem, DatasetRecord, EventAlert, ModelRegistry, Observation, TrainingSession
+from app.vision.classification import CLOUD_TYPE_CLASSES
+from app.vision.masking import build_valid_sky_mask_from_config, neutralize_excluded_pixels
+from app.vision.segmentation import _radiometric_probabilities
+
+AUTO_DATASET_NAME = "location_auto_reinforce"
+
+_EVENT_TYPE_TO_LABEL = {
+    "storm_like_development": "storm_like_structure",
+    "rapid_cloud_increase": "rapid_cloud_development",
+    "rapid_sky_clearing": "sky_clearing",
+    "rapid_sky_darkening": "dark_cloud_development",
+    "dense_cloud_region": "cloud_cover_increasing",
+    "camera_obstruction": "camera_obstruction",
+}
+
+
+def _derive_cloud_genus_label(obs: Observation) -> str:
+    if (
+        obs.dominant_cloud_type in CLOUD_TYPE_CLASSES
+        and obs.dominant_cloud_type != "unknown"
+        and obs.classification_confidence >= 0.40
+    ):
+        return obs.dominant_cloud_type
+    if obs.cloud_coverage_pct < 12.0:
+        return "clear_sky"
+    if obs.dark_cloud_pct >= 28.0:
+        return "cumulonimbus_like"
+    if obs.cloud_coverage_pct >= 85.0:
+        return "stratus"
+    if obs.thin_cloud_pct > obs.dense_cloud_pct * 1.4:
+        return "cirrus"
+    if obs.dense_cloud_pct >= 45.0:
+        return "stratocumulus"
+    return "cumulus"
+
+
+def auto_label_local_observations(
+    db: Session,
+    config: AppConfig,
+    max_samples: int | None = None,
+    min_quality: float | None = None,
+    include_baseline_replay: bool | None = None,
+) -> dict[str, Any]:
+    """
+    Build/refresh the site-specific `location_auto_reinforce` training dataset using
+    real captured local camera frames, active exclusion masks, verified user Confirm/Deny
+    event feedback, manual user annotations, and a compact baseline replay anchor.
+    """
+    at_cfg = config.ai.auto_train
+    limit_samples = max_samples if max_samples is not None else at_cfg.max_local_samples
+    qual_thresh = min_quality if min_quality is not None else at_cfg.min_quality_score
+    use_replay = include_baseline_replay if include_baseline_replay is not None else at_cfg.include_baseline_replay
+
+    candidates = (
+        db.query(Observation)
+        .filter(Observation.is_usable.is_(True), Observation.quality_score >= qual_thresh)
+        .order_by(Observation.captured_at.desc(), Observation.id.desc())
+        .all()
+    )
+
+    seen_hashes: set[str] = set()
+    unique_valid: list[Observation] = []
+    for obs in candidates:
+        if not obs.raw_path or not Path(obs.raw_path).exists():
+            continue
+        fhash = (obs.frame_hash or "").strip()
+        if fhash:
+            if fhash in seen_hashes:
+                continue
+            seen_hashes.add(fhash)
+        unique_valid.append(obs)
+
+    if not unique_valid:
+        raise ValueError("No usable local camera observations available on disk yet.")
+
+    if len(unique_valid) > limit_samples:
+        step = np.linspace(0, len(unique_valid) - 1, num=limit_samples, dtype=int)
+        selected = [unique_valid[int(i)] for i in sorted(set(step.tolist()))]
+    else:
+        selected = list(unique_valid)
+
+    # Sort chronologically ascending so temporal sequences reflect real progression
+    selected.sort(key=lambda o: (o.captured_at, o.id))
+
+    obs_ids = [o.id for o in selected]
+    ev_rows = (
+        db.query(EventAlert)
+        .filter(EventAlert.observation_id.in_(obs_ids))
+        .order_by(EventAlert.id.desc())
+        .all()
+    )
+    events_by_obs: dict[int, list[EventAlert]] = {}
+    for ev in ev_rows:
+        if ev.observation_id is not None:
+            events_by_obs.setdefault(ev.observation_id, []).append(ev)
+
+    # Map existing manual user annotations so we never discard explicit human corrections
+    user_ds = db.query(DatasetRecord).filter(DatasetRecord.name == "user_camera_labels").first()
+    user_by_obs: dict[int, DatasetItem] = {}
+    extra_user_items: list[DatasetItem] = []
+    selected_id_set = set(obs_ids)
+    if user_ds:
+        for ui in db.query(DatasetItem).filter(DatasetItem.dataset_id == user_ds.id).all():
+            if not Path(ui.image_path).exists():
+                continue
+            if ui.observation_id and ui.observation_id in selected_id_set:
+                user_by_obs[ui.observation_id] = ui
+            else:
+                extra_user_items.append(ui)
+
+    root = config.datasets_dir / AUTO_DATASET_NAME
+    img_dir = root / "images"
+    msk_dir = root / "masks"
+    img_dir.mkdir(parents=True, exist_ok=True)
+    msk_dir.mkdir(parents=True, exist_ok=True)
+
+    items_meta: list[dict[str, Any]] = []
+    local_count = 0
+    user_labeled_count = 0
+    confirmed_events_used = 0
+    max_obs_id = max(obs_ids)
+
+    prev_obs: Observation | None = None
+    for idx, obs in enumerate(selected):
+        bgr = cv2.imread(obs.raw_path)
+        if bgr is None:
+            continue
+
+        h, w = bgr.shape[:2]
+        scale = min(1.0, 512.0 / max(h, w))
+        save_w = max(64, int(round(w * scale)))
+        save_h = max(64, int(round(h * scale)))
+
+        valid_mask = build_valid_sky_mask_from_config((h, w), config.camera)
+        clean_bgr = neutralize_excluded_pixels(bgr, valid_mask)
+        train_bgr = cv2.resize(clean_bgr, (save_w, save_h), interpolation=cv2.INTER_AREA)
+
+        valid_small = cv2.resize(valid_mask, (save_w, save_h), interpolation=cv2.INTER_NEAREST)
+        physics_small = np.argmax(
+            _radiometric_probabilities(cv2.resize(clean_bgr, (128, 128), interpolation=cv2.INTER_AREA)),
+            axis=-1,
+        ).astype(np.uint8)
+        physics_resized = cv2.resize(physics_small, (save_w, save_h), interpolation=cv2.INTER_NEAREST)
+
+        manual_item = user_by_obs.get(obs.id)
+        if manual_item and manual_item.mask_path and Path(manual_item.mask_path).exists():
+            m_disk = cv2.imread(manual_item.mask_path, cv2.IMREAD_GRAYSCALE)
+            if m_disk is not None:
+                m_res = cv2.resize(m_disk, (save_w, save_h), interpolation=cv2.INTER_NEAREST)
+                pseudo_mask = np.where(m_res > 5, np.where(m_res > 127, 2, 0), np.where(m_res == 5, physics_resized, m_res)).astype(np.uint8)
+            else:
+                pseudo_mask = physics_resized
+        elif obs.seg_mask_path and Path(obs.seg_mask_path).exists():
+            m_disk = cv2.imread(obs.seg_mask_path, cv2.IMREAD_GRAYSCALE)
+            if m_disk is not None:
+                m_res = cv2.resize(m_disk, (save_w, save_h), interpolation=cv2.INTER_NEAREST)
+                pseudo_mask = np.where(m_res == 5, physics_resized, np.clip(m_res, 0, 4)).astype(np.uint8)
+            else:
+                pseudo_mask = physics_resized
+        else:
+            pseudo_mask = physics_resized
+
+        pseudo_mask[valid_small == 0] = 0
+
+        dst_img = img_dir / f"loc_obs_{obs.id}.jpg"
+        dst_msk = msk_dir / f"loc_obs_{obs.id}.png"
+        cv2.imwrite(str(dst_img), train_bgr, [cv2.IMWRITE_JPEG_QUALITY, 90])
+        cv2.imwrite(str(dst_msk), pseudo_mask)
+
+        # Resolve event label honoring user Confirm / Deny feedback first
+        obs_events = events_by_obs.get(obs.id, [])
+        confirmed_mapped = next(
+            (
+                _EVENT_TYPE_TO_LABEL[e.event_type]
+                for e in obs_events
+                if (e.user_status or ("confirmed" if e.acknowledged else "pending")) == "confirmed"
+                and e.event_type in _EVENT_TYPE_TO_LABEL
+            ),
+            None,
+        )
+        all_rejected = bool(obs_events) and all(
+            (e.user_status or "pending") == "rejected" for e in obs_events
+        )
+
+        if manual_item:
+            cloud_lbl = manual_item.cloud_type_label or _derive_cloud_genus_label(obs)
+            event_lbl = manual_item.event_label or "normal"
+            quality_lbl = manual_item.quality_label or "usable"
+            is_user_lbl = True
+            user_labeled_count += 1
+        else:
+            cloud_lbl = _derive_cloud_genus_label(obs)
+            quality_lbl = "usable"
+            is_user_lbl = False
+            if confirmed_mapped:
+                event_lbl = confirmed_mapped
+                confirmed_events_used += 1
+            elif all_rejected:
+                event_lbl = "normal"
+            elif obs.dark_cloud_pct >= 35.0:
+                event_lbl = "storm_like_structure"
+            elif prev_obs is not None:
+                cov_delta = float(obs.cloud_coverage_pct) - float(prev_obs.cloud_coverage_pct)
+                lum_delta = float(obs.avg_luminance) - float(prev_obs.avg_luminance)
+                if cov_delta >= 18.0:
+                    event_lbl = "rapid_cloud_development"
+                elif cov_delta <= -18.0:
+                    event_lbl = "sky_clearing"
+                elif lum_delta <= -15.0:
+                    event_lbl = "dark_cloud_development"
+                elif cov_delta >= 8.0:
+                    event_lbl = "cloud_cover_increasing"
+                else:
+                    event_lbl = "normal"
+            else:
+                event_lbl = "normal"
+
+        cov_gt = round(float(np.mean((pseudo_mask >= 1) & (pseudo_mask <= 3)) * 100.0), 2)
+        items_meta.append({
+            "observation_id": obs.id,
+            "group_key": f"loc_seq_{idx // 6}",
+            "sequence_index": idx % 6,
+            "image_path": str(dst_img),
+            "mask_path": str(dst_msk),
+            "cloud_type_label": cloud_lbl,
+            "event_label": event_lbl,
+            "quality_label": quality_lbl,
+            "cloud_coverage_gt": cov_gt,
+            "user_labeled": is_user_lbl,
+        })
+        local_count += 1
+        prev_obs = obs
+
+    if local_count == 0:
+        raise ValueError("Selected local observation images could not be read from disk.")
+
+    for ui in extra_user_items:
+        items_meta.append({
+            "observation_id": ui.observation_id,
+            "group_key": ui.group_key or "user_manual",
+            "sequence_index": ui.sequence_index,
+            "image_path": ui.image_path,
+            "mask_path": ui.mask_path,
+            "cloud_type_label": ui.cloud_type_label or "mixed_clouds",
+            "event_label": ui.event_label or "normal",
+            "quality_label": ui.quality_label or "usable",
+            "cloud_coverage_gt": ui.cloud_coverage_gt,
+            "user_labeled": True,
+        })
+        user_labeled_count += 1
+
+    replay_count = 0
+    if use_replay:
+        base_ds = bootstrap_local_sky_dataset(db, config)
+        base_items = (
+            db.query(DatasetItem)
+            .filter(DatasetItem.dataset_id == base_ds.id)
+            .order_by(DatasetItem.group_key.asc(), DatasetItem.sequence_index.asc())
+            .all()
+        )
+        # Keep up to 8 balanced scenario sequences (4 frames each) so temporal/event sequences stay intact
+        by_scenario: dict[str, list[DatasetItem]] = {}
+        for bi in base_items:
+            if not Path(bi.image_path).exists():
+                continue
+            scen_key = bi.group_key.rsplit("_seq", 1)[0]
+            if bi.group_key not in by_scenario and any(k.startswith(scen_key + "_seq") for k in by_scenario):
+                continue
+            grp = by_scenario.setdefault(bi.group_key, [])
+            if len(grp) < 4:
+                grp.append(bi)
+            if len(by_scenario) >= 8 and all(len(v) >= 4 for v in by_scenario.values()):
+                break
+
+        for gk, seq in by_scenario.items():
+            for ri in seq:
+                items_meta.append({
+                    "observation_id": None,
+                    "group_key": f"replay_{gk}",
+                    "sequence_index": ri.sequence_index,
+                    "image_path": ri.image_path,
+                    "mask_path": ri.mask_path,
+                    "cloud_type_label": ri.cloud_type_label,
+                    "event_label": ri.event_label,
+                    "quality_label": ri.quality_label,
+                    "cloud_coverage_gt": ri.cloud_coverage_gt,
+                    "user_labeled": False,
+                })
+                replay_count += 1
+
+    items_meta = _assign_group_splits(items_meta)
+
+    existing = db.query(DatasetRecord).filter(DatasetRecord.name == AUTO_DATASET_NAME).first()
+    if existing:
+        db.query(DatasetItem).filter(DatasetItem.dataset_id == existing.id).delete()
+        rec = existing
+        rec.item_count = len(items_meta)
+        rec.root_path = str(root)
+        rec.source_type = "location_auto_labeled"
+        rec.metadata_json = json.dumps({
+            "updated_at": datetime.now(UTC).isoformat(),
+            "local_items": local_count,
+            "user_labeled_items": user_labeled_count,
+            "confirmed_event_items": confirmed_events_used,
+            "replay_items": replay_count,
+        })
+    else:
+        rec = DatasetRecord(
+            name=AUTO_DATASET_NAME,
+            version="1.0.0",
+            source_type="location_auto_labeled",
+            license_name="Local Camera Auto-Reinforcement",
+            description="Auto-labeled site-specific sky observations merged with user corrections and replay anchors.",
+            root_path=str(root),
+            task_types_json=json.dumps(["segmentation", "classification", "temporal", "event"]),
+            item_count=len(items_meta),
+            integrity_verified=True,
+            metadata_json=json.dumps({
+                "updated_at": datetime.now(UTC).isoformat(),
+                "local_items": local_count,
+                "user_labeled_items": user_labeled_count,
+                "confirmed_event_items": confirmed_events_used,
+                "replay_items": replay_count,
+            }),
+        )
+        db.add(rec)
+        db.flush()
+
+    for it in items_meta:
+        db.add(
+            DatasetItem(
+                dataset_id=rec.id,
+                observation_id=it["observation_id"],
+                split=it["split"],
+                group_key=it["group_key"],
+                sequence_index=it["sequence_index"],
+                image_path=it["image_path"],
+                mask_path=it["mask_path"],
+                cloud_type_label=it["cloud_type_label"],
+                event_label=it["event_label"],
+                quality_label=it["quality_label"],
+                cloud_coverage_gt=it["cloud_coverage_gt"],
+                user_labeled=it["user_labeled"],
+            )
+        )
+    db.commit()
+    db.refresh(rec)
+
+    return {
+        "dataset_id": rec.id,
+        "dataset_name": rec.name,
+        "total_items": len(items_meta),
+        "local_items": local_count,
+        "user_labeled_items": user_labeled_count,
+        "confirmed_event_items": confirmed_events_used,
+        "replay_items": replay_count,
+        "latest_observation_id": max_obs_id,
+    }
+
+
+class AutoLearnManager:
+    """Coordinates site-specific Auto-Label + Auto-Train cycles safely on background threads."""
+
+    def __init__(self) -> None:
+        self._lock = threading.RLock()
+        self._stop_requested = False
+        self._running = False
+        self._stage: str = "idle"
+        self._current_family: str | None = None
+        self._last_run_at: str | None = None
+        self._last_run_ts: float = 0.0
+        self._last_obs_id: int = 0
+        self._last_summary: dict[str, Any] | None = None
+        self._last_jobs: list[dict[str, Any]] = []
+        self._last_error: str = ""
+
+    def get_status(self, db: Session, config: AppConfig) -> dict[str, Any]:
+        at_cfg = config.ai.auto_train
+        eligible_rows = (
+            db.query(Observation)
+            .filter(
+                Observation.is_usable.is_(True),
+                Observation.quality_score >= at_cfg.min_quality_score,
+                Observation.raw_path != "",
+            )
+            .all()
+        )
+        eligible = sum(1 for r in eligible_rows if Path(r.raw_path).exists())
+        new_since_last = sum(
+            1 for r in eligible_rows if r.id > self._last_obs_id and Path(r.raw_path).exists()
+        )
+        with self._lock:
+            return {
+                "enabled": at_cfg.enabled,
+                "config": at_cfg.model_dump(),
+                "running": self._running,
+                "stage": self._stage,
+                "current_family": self._current_family,
+                "last_run_at": self._last_run_at,
+                "last_summary": self._last_summary,
+                "last_jobs": list(self._last_jobs),
+                "last_error": self._last_error,
+                "eligible_local_observations": eligible,
+                "new_since_last_run": new_since_last,
+            }
+
+    def request_stop(self) -> dict[str, Any]:
+        with self._lock:
+            self._stop_requested = True
+        stopped_jobs = get_training_manager().request_stop()
+        return {"stop_requested": True, "stopped_training_jobs": stopped_jobs}
+
+    def trigger_run(
+        self,
+        families: list[str] | None = None,
+        epochs: int | None = None,
+        only_label: bool = False,
+        async_run: bool = True,
+    ) -> dict[str, Any]:
+        cfg = get_config_manager().get()
+        if not only_label and not cfg.ai.training_enabled:
+            raise RuntimeError("Training is disabled in configuration.")
+
+        with self._lock:
+            if self._running:
+                raise RuntimeError("Auto-train cycle is already running.")
+            if get_training_manager().has_active_jobs():
+                raise RuntimeError("Another training job is currently running.")
+
+            with get_db_session() as db:
+                has_usable = (
+                    db.query(Observation)
+                    .filter(
+                        Observation.is_usable.is_(True),
+                        Observation.quality_score >= cfg.ai.auto_train.min_quality_score,
+                        Observation.raw_path != "",
+                    )
+                    .all()
+                )
+                if not any(Path(r.raw_path).exists() for r in has_usable):
+                    raise ValueError("No usable local camera images captured yet for auto-training.")
+
+            self._stop_requested = False
+            self._running = True
+            self._stage = "auto_labeling"
+            self._current_family = None
+            self._last_error = ""
+            self._last_jobs = []
+
+        target_families = list(families or cfg.ai.auto_train.families or ["segmentation", "classification"])
+        run_epochs = epochs if epochs is not None else cfg.ai.auto_train.epochs
+
+        if async_run:
+            t = threading.Thread(
+                target=self._execute_cycle,
+                args=(target_families, run_epochs, only_label),
+                name="sky-observer-autotrain",
+                daemon=True,
+            )
+            t.start()
+        else:
+            self._execute_cycle(target_families, run_epochs, only_label)
+
+        return {
+            "started": True,
+            "only_label": only_label,
+            "families": target_families,
+            "epochs": run_epochs,
+            "async": async_run,
+        }
+
+    def _execute_cycle(self, target_families: list[str], run_epochs: int, only_label: bool) -> None:
+        cfg = get_config_manager().get()
+        try:
+            with self._lock:
+                self._stage = "auto_labeling"
+                self._current_family = None
+
+            with get_db_session() as db:
+                summary = auto_label_local_observations(db, cfg)
+
+            with self._lock:
+                self._last_summary = summary
+                self._last_obs_id = int(summary.get("latest_observation_id", self._last_obs_id))
+
+            if only_label or self._stop_requested:
+                with self._lock:
+                    self._stage = "completed"
+                    self._current_family = None
+                    self._last_run_at = datetime.now(UTC).isoformat()
+                    self._last_run_ts = time.time()
+                    self._running = False
+                return
+
+            tm = get_training_manager()
+            ds_id = int(summary["dataset_id"])
+            jobs_out: list[dict[str, Any]] = []
+
+            for fam in target_families:
+                if self._stop_requested:
+                    break
+                with self._lock:
+                    self._stage = "training"
+                    self._current_family = fam
+
+                warm_path: str | None = None
+                if cfg.ai.auto_train.warm_start:
+                    with get_db_session() as db:
+                        active_rec = (
+                            db.query(ModelRegistry)
+                            .filter(ModelRegistry.model_family == fam, ModelRegistry.is_active.is_(True))
+                            .first()
+                        )
+                        if active_rec and Path(active_rec.weights_path).exists():
+                            warm_path = active_rec.weights_path
+
+                res = tm.start_training(
+                    model_family=fam,
+                    dataset_id=ds_id,
+                    epochs=run_epochs,
+                    learning_rate=cfg.ai.auto_train.learning_rate,
+                    auto_activate=True,
+                    async_run=False,
+                    warm_start_weights=warm_path,
+                )
+                with get_db_session() as db:
+                    sess = db.query(TrainingSession).filter(TrainingSession.id == res["session_id"]).first()
+                    jobs_out.append({
+                        "job_id": res["job_id"],
+                        "model_family": fam,
+                        "device": res["device"],
+                        "status": sess.status if sess else "unknown",
+                        "best_val_metric": sess.best_val_metric if sess else 0.0,
+                        "error_message": sess.error_message if sess else "",
+                    })
+                with self._lock:
+                    self._last_jobs = list(jobs_out)
+
+            with self._lock:
+                self._stage = "completed"
+                self._current_family = None
+                self._last_run_at = datetime.now(UTC).isoformat()
+                self._last_run_ts = time.time()
+                self._running = False
+        except Exception as exc:
+            with self._lock:
+                self._stage = "error"
+                self._current_family = None
+                self._last_error = str(exc)
+                self._running = False
+
+    def maybe_trigger_scheduled(self, config: AppConfig) -> bool:
+        if not config.ai.auto_train.enabled or not config.ai.training_enabled:
+            return False
+        with self._lock:
+            if self._running or get_training_manager().has_active_jobs():
+                return False
+            if (time.time() - self._last_run_ts) < float(config.ai.auto_train.interval_minutes) * 60.0:
+                return False
+
+        with get_db_session() as db:
+            rows = (
+                db.query(Observation)
+                .filter(
+                    Observation.is_usable.is_(True),
+                    Observation.quality_score >= config.ai.auto_train.min_quality_score,
+                    Observation.id > self._last_obs_id,
+                    Observation.raw_path != "",
+                )
+                .all()
+            )
+            ready = sum(1 for r in rows if Path(r.raw_path).exists())
+            if ready < config.ai.auto_train.min_new_observations:
+                return False
+
+        try:
+            self.trigger_run(async_run=True)
+            return True
+        except Exception:
+            return False
+
+
+_auto_learn_manager = AutoLearnManager()
+
+
+def get_auto_learn_manager() -> AutoLearnManager:
+    return _auto_learn_manager

@@ -1,0 +1,19 @@
+{
+  "name": "Sky Observer — Local AI Sky Observatory",
+  "short_name": "Sky Observer",
+  "description": "Local AI cloud detection, 3D georeferenced sky radar, and short-term nowcasting observatory.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#0B0C0E",
+  "theme_color": "#0B0C0E",
+  "icons": [
+    {
+      "src": "/logo.png",
+      "sizes": "256x256",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}

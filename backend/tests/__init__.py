@@ -1,0 +1,1 @@
+"""Sky Observer test suite."""

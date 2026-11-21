@@ -1,0 +1,63 @@
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    container_name: skyobserver-backend
+    restart: unless-stopped
+    environment:
+      - SKYOBSERVER_ENV=production
+      - SKYOBSERVER_OFFLINE_MODE=true
+      - SKYOBSERVER_DEVICE=auto
+      - SKYOBSERVER_MAX_GPU_MEMORY_FRACTION=0.85
+      - SKYOBSERVER_DATA_DIR=/data
+      - SKYOBSERVER_CONFIG_PATH=/config/config.yaml
+    volumes:
+      - skyobserver_db:/data/db
+      - skyobserver_images:/data/images
+      - skyobserver_models:/data/models
+      - skyobserver_datasets:/data/datasets
+      - skyobserver_timelapse:/data/timelapse
+      - ./config:/config
+    networks:
+      - skyobserver_net
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8080/api/system/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    deploy:
+      resources:
+        limits:
+          memory: ${SKYOBSERVER_MEM_LIMIT:-8G}
+
+  frontend:
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+    container_name: skyobserver-frontend
+    restart: unless-stopped
+    depends_on:
+      backend:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:8080:8080"
+    networks:
+      - skyobserver_net
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+volumes:
+  skyobserver_db:
+  skyobserver_images:
+  skyobserver_models:
+  skyobserver_datasets:
+  skyobserver_timelapse:
+
+networks:
+  skyobserver_net:
+    driver: bridge

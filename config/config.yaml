@@ -1,0 +1,118 @@
+server:
+  host: 127.0.0.1
+  port: 8080
+  offline_mode: false
+  cors_origins:
+  - http://localhost:8080
+  - http://127.0.0.1:8080
+  - http://localhost:5173
+  - http://127.0.0.1:5173
+camera:
+  name: Iriun Webcam (Android)
+  location_description: Roma, Lazio
+  source_type: webcam_device
+  source_url: ''
+  device_index: 0
+  capture_interval_seconds: 5.0
+  analysis_interval_seconds: 15.0
+  archive_interval_seconds: 30.0
+  timeout_seconds: 10.0
+  reconnect_enabled: true
+  reconnect_backoff_seconds: 5.0
+  image_width: 1920
+  image_height: 1080
+  jpeg_quality: 88
+  frame_sampling: 1
+  duplicate_threshold: 0.015
+  orientation_azimuth_deg: 333.0
+  orientation_elevation_deg: 44.0
+  orientation_roll_deg: 0.0
+  tilt_correction_enabled: true
+  fov_horizontal_deg: 74.0
+  fov_vertical_deg: 54.0
+  assumed_cloud_altitude_m: 100.0
+  latitude: 41.9028
+  longitude: 12.4964
+  radar_radius_km: 10.0
+  sky_roi_polygon: []
+  exclusion_polygons: []
+  exclusion_mask_path: ./data/masks/camera_exclusion_mask.png
+vision:
+  inference_resolution: 512
+  cloud_segmentation_enabled: true
+  cloud_classification_enabled: true
+  optical_flow_enabled: true
+  image_quality_check_enabled: true
+  grid_rows: 3
+  grid_cols: 3
+  min_quality_score: 0.4
+  uncertainty_entropy_threshold: 0.72
+  classification_min_confidence: 0.35
+forecast:
+  horizons_minutes:
+  - 5
+  - 15
+  - 30
+  - 60
+  update_interval_seconds: 60.0
+  rain_prediction_enabled: true
+  experimental_predictions: true
+  rules:
+    rapid_increase_rate_pct_per_min: 1.5
+    rapid_decrease_rate_pct_per_min: -1.5
+    darkening_luminance_delta: -12.0
+    overcast_threshold_pct: 82.0
+    clear_threshold_pct: 18.0
+    storm_dark_cloud_pct: 35.0
+    high_motion_consistency: 0.65
+ai:
+  device: auto
+  mixed_precision: true
+  max_gpu_memory_fraction: 0.85
+  batch_size: 4
+  gradient_accumulation_steps: 1
+  training_enabled: true
+  default_epochs: 12
+  learning_rate: 0.001
+  early_stopping_patience: 4
+  auto_train:
+    enabled: true
+    interval_minutes: 60
+    min_new_observations: 12
+    min_quality_score: 0.5
+    max_local_samples: 80
+    include_baseline_replay: true
+    epochs: 3
+    learning_rate: 0.0005
+    families:
+    - segmentation
+    - classification
+    - event
+    warm_start: true
+storage:
+  base_dir: ./data
+  database_path: ./data/db/skyobserver.db
+  raw_retention_days: 14
+  processed_retention_days: 30
+  timelapse_retention_days: 60
+  event_retention_days: 90
+  training_retention_days: 3650
+  max_storage_gb: 50.0
+  image_storage_enabled: true
+events:
+  rapid_cloud_increase_pct: 20.0
+  rapid_cloud_decrease_pct: 20.0
+  rapid_darkening_delta: -18.0
+  dense_cloud_alert_pct: 60.0
+  storm_like_dark_cloud_pct: 38.0
+  camera_move_shift_px: 18.0
+  min_storage_free_gb: 2.0
+  cooldown_minutes: 15
+  rejected_backoff_minutes: 60
+  camera_movement_enabled: true
+  browser_notifications_enabled: true
+online_weather:
+  provider: open_meteo
+  cache_ttl_seconds: 300
+  fusion_weight_online: 0.4
+  rainviewer_enabled: true
