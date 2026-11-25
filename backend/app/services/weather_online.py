@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import time
 from datetime import datetime, UTC
 from threading import RLock
@@ -10,6 +11,8 @@ from typing import Any
 import httpx
 
 from app.config import AppConfig
+
+logger = logging.getLogger(__name__)
 
 OPEN_METEO_FORECAST_URL = "https://api.open-meteo.com/v1/forecast"
 OPEN_METEO_GEOCODE_URL = "https://geocoding-api.open-meteo.com/v1/search"
@@ -255,11 +258,12 @@ class OnlineWeatherService:
                 self._weather_cache[key] = (now, payload)
             return payload
         except Exception as exc:
+            logger.warning("Online weather request failed: %s", exc)
             return {
                 "offline_mode": False,
                 "available": False,
                 "provider": "Open-Meteo",
-                "error": str(exc),
+                "error": "Online weather provider temporarily unavailable",
             }
 
     def get_regional_cloud_grid(

@@ -798,8 +798,10 @@ def api_dataset_import(req: DatasetImportRequest, db: Session = Depends(get_db))
             description=req.description,
         )
         return get_dataset_summary(db, rec.id)
-    except (FileNotFoundError, ValueError) as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=400, detail="Dataset directory does not exist inside local data directory") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="Invalid dataset directory path or no readable images found") from exc
 
 
 @app.post("/api/dataset/label")

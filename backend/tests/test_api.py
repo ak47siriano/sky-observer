@@ -622,3 +622,26 @@ def test_camera_geometry_auto_detect_endpoint(isolated_env):
         assert body["orientation_roll_deg"] > 1.5
         assert "geometry" in body
         assert body["geometry"]["orientation_elevation_deg"] == body["orientation_elevation_deg"]
+
+
+def test_dataset_import_blocks_path_traversal(isolated_env):
+    import numpy as np
+
+    with TestClient(app) as client:
+        # Traversal outside configured data_dir must be rejected
+        r_bad = client.post(
+            "/api/dataset/import",
+            json={"name": "escape_attempt", "directory_path": "../../../etc"},
+        )
+        assert r_bad.status_code == 400
+
+        # Valid directory inside configured datasets_dir succeeds
+        ok_dir = isolated_env.datasets_dir / "valid_cam_ds"
+        ok_dir.mkdir(parents=True, exist_ok=True)
+        cv2.imwrite(str(ok_dir / "sky_01.jpg"), np.full((64, 64, 3), (200, 150, 90), dtype=np.uint8))
+        r_ok = client.post(
+            "/api/dataset/import",
+            json={"name": "valid_cam_ds", "directory_path": "valid_cam_ds"},
+        )
+        assert r_ok.status_code == 200
+        assert r_ok.json()["item_count"] == 1

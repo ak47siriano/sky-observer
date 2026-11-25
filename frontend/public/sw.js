@@ -3,6 +3,19 @@ const STATIC_CACHE = `sky-observer-static-${CACHE_VERSION}`;
 const RUNTIME_CACHE = `sky-observer-runtime-${CACHE_VERSION}`;
 const TILE_CACHE = `sky-observer-tiles-${CACHE_VERSION}`;
 const MAX_TILE_ENTRIES = 250;
+const ALLOWED_TILE_HOST_SUFFIXES = [
+  "openstreetmap.org",
+  "cartocdn.com",
+  "rainviewer.com",
+  "arcgisonline.com",
+];
+
+function isAllowedTileHost(hostname) {
+  const host = String(hostname || "").toLowerCase();
+  return ALLOWED_TILE_HOST_SUFFIXES.some(
+    (domain) => host === domain || host.endsWith(`.${domain}`)
+  );
+}
 
 const APP_SHELL = ["/", "/index.html", "/logo.png", "/manifest.webmanifest"];
 
@@ -64,13 +77,8 @@ self.addEventListener("fetch", (event) => {
     return;
   }
 
-  // Map tiles (RainViewer / OSM / Carto): stale-while-revalidate with bounded LRU-style trim
-  if (
-    url.hostname.includes("tile") ||
-    url.hostname.includes("openstreetmap.org") ||
-    url.hostname.includes("cartocdn.com") ||
-    url.hostname.includes("rainviewer.com")
-  ) {
+  // Map tiles (RainViewer / OSM / Carto / Esri): stale-while-revalidate with strict host allowlist
+  if (isAllowedTileHost(url.hostname)) {
     event.respondWith(
       caches.open(TILE_CACHE).then(async (cache) => {
         const cached = await cache.match(request);

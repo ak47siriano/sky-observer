@@ -24,6 +24,17 @@ import { ExclusionMaskPainter } from "./ExclusionMaskPainter";
 import { SkyHorizonOverlay } from "./SkyHorizonOverlay";
 
 type StageMode = "raw" | "segmentation" | "compare" | "motion" | "timelapse" | "exclude";
+type TimelapseLayer = "raw" | "segmentation" | "motion";
+
+const SAFE_TIMELAPSE_LAYERS: Record<string, TimelapseLayer> = {
+  raw: "raw",
+  segmentation: "segmentation",
+  motion: "motion",
+};
+
+function sanitizeTimelapseLayer(val: string): TimelapseLayer {
+  return SAFE_TIMELAPSE_LAYERS[val] ?? "raw";
+}
 
 export interface SkyStageProps {
   camera: CameraStatus | null;
@@ -274,7 +285,7 @@ export const SkyStage: React.FC<SkyStageProps> = ({
               />
               <select
                 value={tlLayer}
-                onChange={(e) => setTlLayer(e.target.value as any)}
+                onChange={(e) => setTlLayer(sanitizeTimelapseLayer(e.target.value))}
                 className="obs-input text-xs py-1"
               >
                 <option value="raw">{t("timelapse.layer.raw")}</option>
@@ -377,7 +388,7 @@ export const SkyStage: React.FC<SkyStageProps> = ({
           <div className="aspect-video bg-[#08090B] flex items-center justify-center relative">
             {currentTl ? (
               <img
-                src={`/api/analysis/image/${currentTl.observation_id}?layer=${tlLayer}`}
+                src={`/api/analysis/image/${Math.max(0, Math.floor(Number(currentTl.observation_id) || 0))}?layer=${sanitizeTimelapseLayer(tlLayer)}`}
                 alt="Timelapse frame"
                 className="w-full h-full object-contain"
               />

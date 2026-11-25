@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 import math
+import os
+import re
 import shutil
 from datetime import datetime, UTC
 from pathlib import Path
@@ -362,20 +364,37 @@ def import_local_dataset(
     Inspect and import a local directory containing sky images, optional segmentation masks,
     or class subdirectories (e.g. CCSN-style folders or SWIMSEG-style images/+masks/).
     """
-    source_dir = source_dir.resolve()
-    if not source_dir.exists() or not source_dir.is_dir():
-        raise FileNotFoundError(f"Dataset directory does not exist: {source_dir}")
+    allowed_base = os.path.realpath(str(config.data_dir))
+    datasets_base = os.path.realpath(str(config.datasets_dir))
+    raw_path = str(source_dir).strip()
+    if not raw_path:
+        raise ValueError("Dataset directory path cannot be empty")
+    candidate = (
+        os.path.realpath(raw_path)
+        if os.path.isabs(raw_path)
+        else os.path.realpath(os.path.join(datasets_base, raw_path))
+    )
+    if candidate != allowed_base and not candidate.startswith(allowed_base + os.sep):
+        raise ValueError(f"Dataset directory must reside inside {allowed_base}")
 
-    dest_root = config.datasets_dir / name.replace(" ", "_").lower()
+    safe_source_dir = Path(candidate)
+    if not safe_source_dir.exists() or not safe_source_dir.is_dir():
+        raise FileNotFoundError("Dataset directory does not exist")
+
+    safe_slug = re.sub(r"[^a-z0-9_-]+", "_", name.strip().lower()).strip("_") or "local_dataset"
+    dest_candidate = os.path.realpath(os.path.join(datasets_base, safe_slug))
+    if not dest_candidate.startswith(datasets_base + os.sep):
+        raise ValueError("Invalid dataset name")
+    dest_root = Path(dest_candidate)
     dest_root.mkdir(parents=True, exist_ok=True)
 
     # Detect structure: (A) images/ & masks/ (or GTmaps/ or seg_masks/) pairs, or (B) class subfolders, or (C) flat folder
-    images_dir = source_dir / "images"
-    masks_dir = source_dir / "masks"
+    images_dir = safe_source_dir / "images"
+    masks_dir = safe_source_dir / "masks"
     if not masks_dir.exists():
-        masks_dir = source_dir / "GTmaps"
+        masks_dir = safe_source_dir / "GTmaps"
     if not masks_dir.exists():
-        masks_dir = source_dir / "seg_masks"
+        masks_dir = safe_source_dir / "seg_masks"
 
     discovered: list[dict[str, Any]] = []
     task_types: set[str] = set()
@@ -407,7 +426,7 @@ def import_local_dataset(
             task_types.add("segmentation")
     else:
         # Check class folders or flat files
-        subdirs = [d for d in sorted(source_dir.iterdir()) if d.is_dir() and d.name.lower() not in {"masks", "gtmaps"}]
+        subdirs = [d for d in sorted(safe_source_dir.iterdir()) if d.is_dir() and d.name.lower() not in {"masks", "gtmaps"}]
         if subdirs:
             for sd in subdirs:
                 lbl = sd.name.lower().strip()
@@ -427,7 +446,7 @@ def import_local_dataset(
             if discovered:
                 task_types.add("classification")
         else:
-            for idx, img_file in enumerate(sorted(source_dir.glob("*"))):
+            for idx, img_file in enumerate(sorted(safe_source_dir.glob("*"))):
                 if not img_file.is_file() or img_file.suffix.lower() not in IMAGE_EXTS:
                     continue
                 if cv2.imread(str(img_file)) is None:
@@ -441,7 +460,7 @@ def import_local_dataset(
                 })
 
     if not discovered:
-        raise ValueError(f"No valid readable images found in {source_dir}")
+        raise ValueError("No valid readable images found in dataset directory")
 
     if not task_types:
         task_types.add("classification")
@@ -453,7 +472,7 @@ def import_local_dataset(
         db.query(DatasetItem).filter(DatasetItem.dataset_id == existing.id).delete()
         rec = existing
         rec.item_count = len(discovered)
-        rec.root_path = str(source_dir)
+        rec.root_path = str(safe_source_dir)
         rec.license_name = license_name
         rec.description = description
         rec.task_types_json = json.dumps(sorted(task_types))
@@ -463,8 +482,8 @@ def import_local_dataset(
             version="1.0.0",
             source_type="local_import",
             license_name=license_name,
-            description=description or f"Imported local dataset from {source_dir}",
-            root_path=str(source_dir),
+            description=description or f"Imported local dataset ({safe_source_dir.name})",
+            root_path=str(safe_source_dir),
             task_types_json=json.dumps(sorted(task_types)),
             item_count=len(discovered),
             integrity_verified=True,

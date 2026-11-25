@@ -3,6 +3,18 @@ import { Download, Film, Pause, Play, RefreshCw, SkipBack, Trash2 } from "lucide
 import { useI18n } from "../i18n/I18nContext";
 import { api } from "../services/api";
 
+type TimelapseLayer = "raw" | "segmentation" | "motion";
+
+const SAFE_TIMELAPSE_LAYERS: Record<string, TimelapseLayer> = {
+  raw: "raw",
+  segmentation: "segmentation",
+  motion: "motion",
+};
+
+function sanitizeTimelapseLayer(val: string): TimelapseLayer {
+  return SAFE_TIMELAPSE_LAYERS[val] ?? "raw";
+}
+
 export const TimelapsePage: React.FC = () => {
   const { t, tEnum } = useI18n();
   const [frames, setFrames] = useState<any[]>([]);
@@ -144,7 +156,7 @@ export const TimelapsePage: React.FC = () => {
           />
           <select
             value={layer}
-            onChange={(e) => setLayer(e.target.value as any)}
+            onChange={(e) => setLayer(sanitizeTimelapseLayer(e.target.value))}
             className="bg-[#0F1623] border border-slate-700 rounded-lg px-2.5 py-1.5 text-slate-200"
           >
             <option value="raw">{t("timelapse.layer.raw")}</option>
@@ -245,7 +257,7 @@ export const TimelapsePage: React.FC = () => {
         <div className="aspect-video bg-[#060911] flex items-center justify-center relative">
           {current ? (
             <img
-              src={`/api/analysis/image/${current.observation_id}?layer=${layer}`}
+              src={`/api/analysis/image/${Math.max(0, Math.floor(Number(current.observation_id) || 0))}?layer=${sanitizeTimelapseLayer(layer)}`}
               alt="Timelapse frame"
               className="w-full h-full object-contain"
             />
