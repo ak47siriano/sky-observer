@@ -4,10 +4,13 @@
 
 # Sky Observer — Local AI Sky Observatory, 3D Cloud Radar & Nowcasting
 
-**Turn any smartphone camera (`Iriun` / `IP Webcam` / `RTSP`), USB camera, or public live webcam (`HLS` / `SkylineWebcams`) into a real-time local AI meteorological observatory.**
+**Turn any old smartphone (`Iriun` / `IP Webcam`), USB/RTSP camera, or public live webcam (`HLS` / `SkylineWebcams`) into a zero-cloud AI weather observatory & 3D volumetric cloud radar.**
 
+*Works out of the box on CPU via calibrated radiometric physics (`radiometric-physics-v1`) — zero cloud API keys required — with optional local PyTorch models, auto horizon/roll calibration, and Home Assistant-friendly REST/WebSocket telemetry.*
+
+[![License: MIT](https://img.shields.io/badge/License-MIT-F59E0B.svg)](LICENSE)
 [![Python 3.11+](https://img.shields.io/badge/Python-3.11%2B-3776AB?logo=python&logoColor=white)](#)
-[![PyTorch](https://img.shields.io/badge/PyTorch-4_Local_AI_Models-EE4C2C?logo=pytorch&logoColor=white)](#-the-4-local-ai-models)
+[![PyTorch](https://img.shields.io/badge/Vision-Radiometric_Physics_%2B_PyTorch-EE4C2C?logo=pytorch&logoColor=white)](#-hybrid-physics--pytorch-pipeline)
 [![GPU Support](https://img.shields.io/badge/GPU-CUDA_%7C_ROCm_%7C_DirectML_%7C_MPS_%7C_CPU-76B900)](#-hardware-requirements--gpu-acceleration)
 [![FastAPI](https://img.shields.io/badge/FastAPI-SQLite_WAL-009688?logo=fastapi&logoColor=white)](#-database--storage-architecture)
 [![React 18 + TypeScript](https://img.shields.io/badge/React_18-TypeScript_%2B_Leaflet_%2B_PWA-61DAFB?logo=react&logoColor=black)](#-key-features)
@@ -18,32 +21,68 @@
 
 ---
 
-## 📖 Overview
+## ⚡ Live Walkthrough
 
-**Sky Observer** is a self-hosted, privacy-first **AI Sky Observatory & Short-Term Nowcasting Platform** with a modern **atmospheric glassmorphic UI** and an **immersive Windy-style 3D Geo-Radar**.
+<p align="center">
+  <img src="docs/assets/sky-observer-demo.gif" alt="Sky Observer Live Walkthrough — Original Sky, Cloud Segmentation, Optical Flow & 3D Geo-Radar" width="100%" />
+</p>
 
-It captures live sky frames from local cameras or public live streams, corrects for **3D camera mounting tilt (`0°–110°`), compass azimuth, and roll**, runs a **4-stage neural & deterministic pipeline**, projects high-contrast Windy-style clouds onto a **Georeferenced Radar Map** using **dynamic cloud-base altitude**, exports **HUD-overlaid timelapses**, and forecasts short-term weather evolution (`+5m`, `+15m`, `+20m` camera-only, or up to `+60m` with Open-Meteo).
-
-It runs **100% offline** with zero external API keys required, or in **Online Hybrid Mode** fusing local camera vision with free **Open-Meteo NWP** multi-layer cloud telemetry and **RainViewer** precipitation radar.
+> *Real capture from the running workstation: live timelapse cycling **Original Sky → Calibrated Segmentation → Optical Flow Motion Vectors → Compare Swipe → 3D Volumetric Geo-Radar**.*
 
 ---
 
-## 🖼️ Live UI Showcase (Public Coastal Stream — Cantone di Santa Elena, `-1.83°, -80.75°`)
+## 📖 Why Sky Observer?
 
-### 1. Live Dashboard & Short-Term Nowcast
-Real-time camera ingestion, radial cloud coverage gauge (`99%` Overcast, `Stratocumulus`), **Current Sky** breakdown (`Thin` / `Dense` / `Dark`), **Short-Term Nowcast** (`+5m` / `+15m` / `+20m` / `+30m`), **Open-Meteo** local sync (`LCL` cloud base `~422 m`), and **Location Auto-Train** status strip:
+Most weather apps only show coarse regional grids miles from your roof — **Sky Observer** turns any local camera into an overhead atmospheric instrument:
+
+| Capability | What It Does Locally |
+| :--- | :--- |
+| **Zero-GPU Radiometric Segmentation** | Built-in `radiometric-physics-v1` (CIE-Lab + Red/Blue ratio + sun glare guard + dark-cloud-base protection) runs accurately on CPU out of the box — no dataset or GPU needed. |
+| **1-Click Auto-Horizon & 3D Tilt** | Detects the real horizon line and camera roll (`-20°` to `+90°` elevation) from a live frame, masks buildings/terrain below `0°`, and corrects perspective foreshortening. |
+| **Windy-Style 3D Volumetric Geo-Radar** | Reprojects thin, dense, and dark clouds onto dark Leaflet tiles using dynamic cloud altitude (`Open-Meteo LCL` or visual morphology) fused with **RainViewer** precipitation radar. |
+| **Optical Flow & Short-Term Nowcast** | Tracks sky-masked cloud advection (`Farneback + Lucas-Kanade + Phase Correlation`) to forecast `+5m` to `+60m` clearing, cloud cover, and darkening alerts. |
+| **100% Local & Smart-Home Ready** | Runs completely offline in SQLite WAL + FastAPI + React PWA, with live `/ws/live` WebSockets and REST JSON endpoints ready for **Home Assistant** or scripts. |
+
+<details>
+<summary><b>🏠 Home Assistant Integration Example (Zero-Dependency REST Sensor)</b></summary>
+
+```yaml
+# configuration.yaml — polls your local Sky Observer instance directly over LAN
+rest:
+  - resource: http://<your-lan-ip>:8081/api/analysis/latest
+    scan_interval: 30
+    sensor:
+      - name: "Sky Observer Cloud Cover"
+        value_template: "{{ value_json.observation.cloud_coverage_pct | round(1) }}"
+        unit_of_measurement: "%"
+      - name: "Sky Observer Dominant Cloud"
+        value_template: "{{ value_json.observation.dominant_cloud_type }}"
+      - name: "Sky Observer Dark Cloud Base"
+        value_template: "{{ value_json.observation.dark_cloud_pct | round(1) }}"
+        unit_of_measurement: "%"
+      - name: "Sky Observer Cloud Motion"
+        value_template: "{{ value_json.observation.motion_direction_cardinal }} ({{ value_json.observation.motion_speed_px_s | round(2) }} px/s)"
+```
+</details>
+
+---
+
+## 🖼️ Live UI Screenshots (Public Skyline Webcam Stream)
+
+### 1. Compare Swipe Segmentation & Short-Term Nowcast
+Real-time camera ingestion with interactive **Compare Swipe** overlay separating thin, dense, and dark cloud bases cleanly above the urban horizon, **Current Sky** breakdown (`8/8 OVC`), **Open-Meteo** local sync (`LCL` cloud base), and **Short-Term Nowcast** (`+5m` to `+30m`):
 
 ![Sky Observer Live Dashboard](docs/screenshots/dashboard-live.png)
 
 ### 2. Georeferenced Volumetric Cloud Radar
-Projection of local camera cloud segmentation onto dark Leaflet map tiles with the pulsing camera pin, 3D FOV cone, **Windy-style** volumetric cloud palette (`Thin` cyan / `Dense` white / `Dark` storm purple / `Sun Glare` amber), floating glass dock (`Camera Clouds`, `Open-Meteo Clouds`, `RainViewer Radar`), timeline scrubber, and Picture-in-Picture (PiP) sky frame:
+Projection of local tilted camera cloud segmentation onto dark Leaflet map tiles fused with **Open-Meteo clouds** and **RainViewer precipitation radar**, floating layer dock, timeline scrubber, and Picture-in-Picture (PiP) sky frame:
 
 ![Sky Observer Georeferenced Cloud Radar](docs/screenshots/radar-live.png)
 
-### 3. Historical Atmospheric & Vision Trends
-Multi-panel historical charts tracking **Cloud Cover & Sub-Class Breakdown**, **Sky Luminance (`L*`) & Blue Sky Index**, **Cloud Motion Speed (`px/s`) & Consistency**, and **Texture Contrast & Classification Confidence**, with `1h`/`6h`/`24h`/`72h` windows and **CSV / JSON** export:
+### 3. Live Optical Flow Advection & Timelapse Playback
+Horizon-masked multi-scale **Optical Flow** cloud motion vectors and timelapse playback over live sky decks:
 
-![Sky Observer Historical Atmospheric & Vision Trends](docs/screenshots/trends-live.png)
+![Sky Observer Motion Vectors](docs/screenshots/motion-live.png)
 
 ---
 
@@ -51,11 +90,11 @@ Multi-panel historical charts tracking **Cloud Cover & Sub-Class Breakdown**, **
 
 ```mermaid
 flowchart LR
-    CAM["📷 Camera / Live Stream\nIriun · IP Cam · RTSP · HLS · Multi-Cam"] --> GEOM["📐 3D Tilt & Solar Geometry\n0°–110° Tilt · Dynamic Cloud Altitude"]
-    GEOM --> M1["1️⃣ CloudSegUNet-Mobile\n6-Class Pixel Segmentation"]
-    GEOM --> M2["2️⃣ CloudTypeClassifier-Fusion\nCNN + 12 Radiometric Features"]
+    CAM["📷 Camera / Live Stream\nIriun · IP Cam · RTSP · HLS · Multi-Cam"] --> GEOM["📐 Auto-Horizon & 3D Tilt\nElevation · Roll · Solar Glare Guard"]
+    GEOM --> M1["1️⃣ radiometric-physics-v1\nZero-GPU Sky/Cloud Map (+ Optional U-Net)"]
+    GEOM --> M2["2️⃣ CloudTypeClassifier-EfficientNet\nWMO Cloud Genera + 18 Features"]
     M1 --> FLOW["💨 Dense Optical Flow\n3D Ground-Speed Cloud Advection"]
-    M1 --> RADAR["🗺️ Volumetric HD Radar\n512×512 Bilinear Geo-Projection"]
+    M1 --> RADAR["🗺️ Volumetric HD Radar\n512×512 Horizon-Tapered Geo-Projection"]
     M2 --> SEQ["📊 20-Dim Temporal Buffer"]
     FLOW --> SEQ
     SEQ --> M3["3️⃣ TemporalSkyConvGRU\n+5 / +15 / +30 / +60m Nowcast"]
@@ -78,8 +117,9 @@ flowchart LR
 * **Dynamic Cloud Altitude (Online & Offline)**: Automatically computes cloud altitude from **Open-Meteo Low/Mid/High multi-layer cloud decks + Magnus-Tetens LCL** when online, or dynamically from **local Vision AI cloud morphology** (`Cirrus`, `Altocumulus`, `Cumulus`, `Cumulonimbus`, `Stratus`) when offline.
 * **Multi-Camera 360° Radar Fusion & Tile Cache**: Connect secondary cameras pointing in complementary directions and fuse their live cloud projections onto the same radar map, or pre-cache local map tiles for 100% offline radar use.
 
-### 📐 3D Camera Tilt Calibrator (`0°–110°`) & Flexible Video Sources
-* **Wide-Range Tilt Calibration**: Interactive 2D side-profile & compass calibrator supporting **zenith (`0°`), tilted, horizontal (`90°`), and downward-angled panoramic webcams (up to `110°` / `El -20°`)**, plus live 3D horizon (`0°`), elevation iso-curves, and NOAA sun position overlay.
+### 📐 1-Click Auto-Horizon, 3D Camera Tilt (`0°–110°`) & Flexible Video Sources
+* **Automatic Horizon & Roll Detection**: Click **Auto-Detect Horizon & Roll** in Settings or the Radar Tilt drawer to estimate camera elevation and horizon roll directly from your live skyline image (immune to narrow building spikes, with zenith auto-fallback).
+* **Exact 3D Horizon HUD & Calibrator**: Interactive 2D side-profile & compass calibrator supporting **zenith (`0°`), tilted, horizontal (`90°`), and downward-angled panoramic webcams (up to `110°` / `El -20°`)**, with exact clipped below-horizon shading, elevation iso-curves (`15°–75°`), and NOAA sun position overlay.
 * **Any Camera or Live Web Stream**: Supports Android **Iriun Webcam**, **IP Webcam** (`HTTP Snapshot` / `MJPEG`), **RTSP**, local USB cameras, file uploads, and **Public Web Live Streams (`web_stream`)** including direct `.m3u8` HLS playlists and **SkylineWebcams** pages.
 * **Freehand Exclusion Mask Painter**: Paint out roofs, trees, poles, ocean/buildings, or camera watermarks so only pure sky is analyzed.
 
@@ -94,13 +134,13 @@ flowchart LR
 
 ---
 
-## 🤖 The 4 Local AI Models
+## 🤖 Hybrid Physics & PyTorch Pipeline
 
-Every captured sky observation passes through four specialized lightweight PyTorch models (`< 1 GB VRAM` on GPU, fast on CPU):
+Sky Observer combines a deterministic **zero-GPU radiometric physics engine** (default Stage 1) with specialized lightweight PyTorch models (`< 1 GB VRAM` on GPU, fast on CPU):
 
-| # | Model Family & Architecture | Input $\rightarrow$ Output | Role in Sky Observer | Validation Metrics |
+| # | Model Family & Engine | Input $\rightarrow$ Output | Role in Sky Observer | Validation / Mode |
 | :--- | :--- | :--- | :--- | :--- |
-| **1** | **Segmentation**<br>`CloudSegUNet-MobileNetV3` / `EfficientNetB0` | $384\text{–}512$ RGB Sky Frame $\rightarrow$ **5-class pixel map** (`Clear`, `Thin`, `Dense`, `Dark`, `Sun_Glare` + `Not_Sky=255` ignore mask) | Computes **Cloud Coverage %**, renders high-contrast overlays, $3\times3$ grid, and **projects detailed clouds onto the 3D Radar Map**. Supports 2-phase training (SWINySEG $\rightarrow$ Almería/Clouds-1500). | `val_miou` ($0 \rightarrow 1$)<br>`val_pixel_acc` ($0 \rightarrow 1$) |
+| **1** | **Segmentation (Built-in)**<br>`radiometric-physics-v1` *(or optional `CloudSegUNet`)* | RGB Sky Frame $\rightarrow$ **5-class pixel map** (`Clear`, `Thin`, `Dense`, `Dark`, `Sun_Glare` + `Not_Sky=255` ignore mask) | Computes **Cloud Coverage %** with dark-cloud-base protection, renders swipe overlays, $3\times3$ grid, and **projects horizon-tapered clouds onto the 3D Radar Map**. | Zero-GPU real-time *(or `val_miou` / `val_pixel_acc` if fine-tuned)* |
 | **2** | **Classification**<br>`CloudTypeClassifier-Fusion` | $224\times224$ RGB + **18 tabular features** (5 Stage-1 fractions, solar elevation, RBR, $R-B$, GLCM) $\rightarrow$ **11 WMO Genera** (or 6 grouped) | Identifies WMO cloud genera (supporting TJNU MGCD/GCD) and informs offline dynamic cloud altitude. | `val_accuracy` ($0 \rightarrow 1$)<br>`val_macro_f1` ($0 \rightarrow 1$) |
 | **3** | **Temporal Nowcast**<br>`TemporalSkyConvGRU` | Chronological $T\times20$ visual + optical-flow sequence $\rightarrow$ **3 Camera-Only Horizons** (`+5m`, `+15m`, `+20m`) | Predicts short-term cloud cover %, clearing, increasing, overcast, darkening, and storm signals (extends to `+30m/+60m` when Open-Meteo is enabled). | `val_mae_pct` (lower is better) |
 | **4** | **Events & Alerts**<br>`SkyEventEngine` + `SkyEventClassifier-GRU` | Stage 1 deltas + Stage 2 WMO class + Stage 3 trend $\rightarrow$ **8 Weather & Operational Events** | Hybrid deterministic/neural alert engine with photo snapshots; Confirm/Reject feedback reinforces **Location Auto-Train**. | `val_accuracy` & `val_macro_f1` |
@@ -140,7 +180,9 @@ Sky Observer automatically detects your OS, CPU, RAM, and GPU and offers **4 Har
 
 ---
 
-## 🚀 Quick Start
+## 🚀 Quick Start (30-Second Try — No Camera Needed!)
+
+> **Don't have a camera connected yet?** Select **`Demo Sky Simulation`** in the first-run setup wizard (or upload any sky photo from the Dashboard) to test segmentation, 3D tilt calibration, and radar projection immediately.
 
 ### Option 1: Docker Compose (Recommended)
 
