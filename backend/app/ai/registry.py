@@ -44,15 +44,26 @@ class ActiveModelCache:
                     state = ckpt["model_state_dict"] if isinstance(ckpt, dict) and "model_state_dict" in ckpt else ckpt
                     inferred_nc: int | None = None
                     inferred_h = 3
+                    inferred_arch = row.architecture
                     if row.model_family == "segmentation" and isinstance(state, dict) and "head.weight" in state:
                         inferred_nc = int(state["head.weight"].shape[0])
-                    elif row.model_family == "classification" and isinstance(state, dict) and "classifier.3.weight" in state:
-                        inferred_nc = int(state["classifier.3.weight"].shape[0])
+                        if any(k.startswith("aspp.") for k in state):
+                            inferred_arch = "CloudSegUNet-ConvNeXt-ASPP"
+                    elif row.model_family == "classification" and isinstance(state, dict):
+                        if "head.3.weight" in state:
+                            inferred_nc = int(state["head.3.weight"].shape[0])
+                            if "vis_proj.0.weight" in state and int(state["vis_proj.0.weight"].shape[1]) == 768:
+                                inferred_arch = "CloudTypeClassifier-ConvNeXt"
+                            else:
+                                inferred_arch = "CloudTypeClassifier-EfficientNetB0"
+                        elif "classifier.3.weight" in state:
+                            inferred_nc = int(state["classifier.3.weight"].shape[0])
+                            inferred_arch = "CloudTypeClassifier-Fusion"
                     elif row.model_family == "temporal" and isinstance(state, dict) and "head.2.weight" in state:
                         inferred_h = max(1, int(state["head.2.weight"].shape[0]) // 6)
                     model, arch_name = build_model_for_family(
                         row.model_family,
-                        row.architecture,
+                        inferred_arch,
                         num_classes=inferred_nc,
                         pretrained=False,
                         num_horizons=inferred_h,

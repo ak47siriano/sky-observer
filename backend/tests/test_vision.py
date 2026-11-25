@@ -295,3 +295,105 @@ def test_astronomical_solar_position_and_sun_glare_mask():
     glare = compute_sun_glare_mask(320, 240, geom_sun, sol_day["azimuth_deg"], sol_day["elevation_deg"], max_angle_deg=4.0)
     assert bool(glare[120, 160]) is True
     assert bool(glare[10, 10]) is False
+
+
+def test_sun_glare_and_aureole_segmentation():
+    from app.vision.geometry import CameraGeometry, compute_sun_aureole_prior
+
+    # Clear blue sky with localized bright solar disk + soft Mie aureole in center
+    img = np.full((240, 320, 3), (205, 130, 50), dtype=np.uint8)
+    # Soft bright bloom around sun center (160, 120)
+    cv2.circle(img, (160, 120), 26, (238, 240, 244), -1)
+    img = cv2.GaussianBlur(img, (21, 21), 8.0)
+    # Clipped solar disk core
+    cv2.circle(img, (160, 120), 10, (254, 255, 255), -1)
+
+    valid = np.full((240, 320), 255, dtype=np.uint8)
+    geom = CameraGeometry(
+        elevation_deg=45.0,
+        azimuth_deg=180.0,
+        roll_deg=0.0,
+        fov_horizontal_deg=72.0,
+        fov_vertical_deg=54.0,
+        cloud_altitude_m=2000.0,
+        tilt_correction_enabled=True,
+    )
+    sun_prior = compute_sun_aureole_prior(320, 240, geom, 180.0, 45.0, core_deg=3.5, halo_deg=14.0)
+    seg = run_segmentation(img, valid, inference_resolution=256, sun_prior_map=sun_prior)
+    # Center solar disk must be classified as sun_glare (4), not dense_cloud (2)
+    assert int(seg.class_map[120, 160]) == 4
+    # Outer corner must remain clear_sky (0)
+    assert int(seg.class_map[15, 15]) == 0
+    # Sun glare pixels must be excluded from cloud_binary_mask
+    assert int(seg.cloud_binary_mask[120, 160]) == 0
+    cov = compute_cloud_coverage(seg.class_map, valid, seg.mean_confidence)
+    assert cov["sun_glare_pct"] > 0.0
+    assert cov["clear_sky_pct"] > 70.0
+
+
+def test_dark_cloud_underside_not_clear_sky():
+    # Overcast scene with bright gray-white cloud tops (L~82, slight cool AWB cast)
+    # and darker cool-gray cloud bases (L~54, slight blue-gray cast)
+    img = np.full((240, 320, 3), (212, 198, 184), dtype=np.uint8)  # bright cloudy deck
+    img[110:210, 40:260] = (156, 136, 118)  # shaded darker cloud underside
+    valid = np.full((240, 320), 255, dtype=np.uint8)
+    seg = run_segmentation(img, valid, inference_resolution=256)
+    cov = compute_cloud_coverage(seg.class_map, valid, seg.mean_confidence)
+    # Dark cloud base must be segmented as dark/dense cloud, NOT clear_sky or sun_glare
+    assert cov["clear_sky_pct"] < 5.0
+    assert cov["sun_glare_pct"] == 0.0
+    assert cov["dense_cloud_pct"] + cov["dark_cloud_pct"] > 80.0
+    assert int(seg.class_map[160, 150]) in (2, 3)
+
+
+def test_auto_estimate_camera_tilt_and_horizon():
+    from app.vision.geometry import CameraGeometry, estimate_camera_tilt_from_frame, project_mask_to_radar_bgra
+
+    # 1) Tilted webcam with horizon near ~60% height (camera ~ +4..6 deg above horizon) & roll ~ +5 deg
+    w, h = 640, 360
+    scene = np.full((h, w, 3), (218, 196, 175), dtype=np.uint8)  # bright cloudy sky
+    # Paint dark/textured urban terrain + green/warm rooftops below tilted horizon line
+    # For roll=+5 deg (tan=+0.0875), fy/fx = tan(fovH/2)/tan(fovV/2) ~ 1 => slope dv/du ~ -0.0875
+    cx = w / 2.0
+    y_center = 0.58 * h
+    slope = -0.09
+    yy, xx = np.mgrid[0:h, 0:w]
+    horizon_y = y_center + slope * (xx - cx)
+    ground_mask = yy >= horizon_y
+    scene[ground_mask] = (48, 74, 62)  # dark urban/foliage base
+    # Add terracotta roof texture blocks in ground region
+    rng = np.random.default_rng(7)
+    noise = rng.integers(-18, 19, size=(h, w, 3), dtype=np.int16)
+    scene[ground_mask] = np.clip(scene[ground_mask].astype(np.int16) + noise[ground_mask], 0, 255).astype(np.uint8)
+    # Tall skyscraper spike jutting above left skyline (should NOT ruin robust RANSAC fit)
+    cv2.rectangle(scene, (110, int(y_center - 55)), (145, h), (55, 58, 66), -1)
+
+    est = estimate_camera_tilt_from_frame(scene, fov_horizontal_deg=72.0, fov_vertical_deg=45.0)
+    assert est["detected_horizon"] is True
+    assert est["mode"] == "horizon_visible"
+    assert 1.5 <= est["orientation_elevation_deg"] <= 9.0
+    assert 2.0 <= est["orientation_roll_deg"] <= 8.5
+    assert est["confidence"] >= 0.45
+
+    # 2) Pure zenith all-sky frame (no terrain) -> zenith_sky_only fallback
+    sky_only, _, _, _, _ = _render_synthetic_sky_frame("cumulus", t_step=0, seed=4, width=320, height=240)
+    est_zen = estimate_camera_tilt_from_frame(sky_only, fov_horizontal_deg=72.0, fov_vertical_deg=54.0)
+    assert est_zen["detected_horizon"] is False
+    assert est_zen["mode"] == "zenith_sky_only"
+    assert est_zen["orientation_elevation_deg"] >= 80.0
+
+    # 3) Low-elevation radar projection remains smooth & finite
+    cls_map = np.full((120, 160), 2, dtype=np.uint8)
+    cls_map[80:, :] = 0
+    geom_low = CameraGeometry(
+        elevation_deg=est["orientation_elevation_deg"],
+        azimuth_deg=180.0,
+        roll_deg=est["orientation_roll_deg"],
+        fov_horizontal_deg=72.0,
+        fov_vertical_deg=45.0,
+        cloud_altitude_m=2000.0,
+        tilt_correction_enabled=True,
+    )
+    bgra = project_mask_to_radar_bgra(cls_map, geom_low, overlay_radius_km=20.0, size=192)
+    assert bgra.shape == (192, 192, 4)
+    assert int(np.max(bgra[:, :, 3])) > 0

@@ -148,7 +148,7 @@ def _heuristic_cloud_probs(
     vals = np.array(list(scores.values()), dtype=np.float64)
     vals = np.exp(vals - np.max(vals))
     vals /= np.sum(vals)
-    return {k: float(v) for k, v in zip(scores.keys(), vals)}
+    return {k: float(v) for k, v in zip(scores.keys(), vals, strict=True)}
 
 
 def _collapse_probs_to_grouped(probs: dict[str, float]) -> dict[str, float]:

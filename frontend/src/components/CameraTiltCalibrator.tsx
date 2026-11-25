@@ -1,6 +1,7 @@
 import React, { useMemo, useRef, useState } from "react";
-import { Compass, Check, Eye, Sliders, Sun } from "lucide-react";
+import { Compass, Check, Eye, Sliders, Sparkles, Sun } from "lucide-react";
 import { useI18n } from "../i18n/I18nContext";
+import { api } from "../services/api";
 import { SkyHorizonOverlay } from "./SkyHorizonOverlay";
 
 export interface CameraGeometryValues {
@@ -56,6 +57,8 @@ export const CameraTiltCalibrator: React.FC<Props> = ({
   const [draggingSide, setDraggingSide] = useState(false);
   const [draggingCompass, setDraggingCompass] = useState(false);
   const [showLiveCam, setShowLiveCam] = useState(!compact);
+  const [detecting, setDetecting] = useState(false);
+  const [detectNote, setDetectNote] = useState<{ text: string; tone: "ok" | "warn" | "err" } | null>(null);
 
   const elDeg = clamp(Number(value.orientation_elevation_deg ?? 65), -20, 90);
   const tiltDeg = Math.round((90 - elDeg) * 10) / 10;
@@ -70,6 +73,51 @@ export const CameraTiltCalibrator: React.FC<Props> = ({
       ...value,
       ...patch,
     });
+  };
+
+  const handleAutoDetectHorizon = async () => {
+    setDetecting(true);
+    setDetectNote(null);
+    try {
+      const res = await api.autoDetectCameraTilt({
+        apply: false,
+        fov_horizontal_deg: fovH,
+        fov_vertical_deg: fovV,
+        recalculate_latest: false,
+      });
+      updateField({
+        orientation_elevation_deg: clamp(Number(res.orientation_elevation_deg ?? elDeg), -20, 90),
+        orientation_roll_deg: clamp(Number(res.orientation_roll_deg ?? 0), -45, 45),
+        tilt_correction_enabled: true,
+      });
+      setShowLiveCam(true);
+      const confPct = Math.round(Number(res.confidence ?? 0.5) * 100);
+      if (res.detected_horizon) {
+        setDetectNote({
+          tone: "ok",
+          text: t("tilt.detectedHorizon", {
+            el: Number(res.orientation_elevation_deg ?? 0).toFixed(1),
+            roll: Number(res.orientation_roll_deg ?? 0).toFixed(1),
+            conf: confPct,
+          }),
+        });
+      } else {
+        setDetectNote({
+          tone: "warn",
+          text: t("tilt.detectedZenith", {
+            el: Number(res.orientation_elevation_deg ?? 85).toFixed(0),
+            conf: confPct,
+          }),
+        });
+      }
+    } catch (e: any) {
+      setDetectNote({
+        tone: "err",
+        text: e?.message || t("tilt.detectFailed"),
+      });
+    } finally {
+      setDetecting(false);
+    }
   };
 
   // Side-profile 2D SVG geometry (viewBox 560 x 270)
@@ -264,6 +312,16 @@ export const CameraTiltCalibrator: React.FC<Props> = ({
         <div className="flex flex-wrap items-center gap-2">
           <button
             type="button"
+            disabled={detecting}
+            onClick={handleAutoDetectHorizon}
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-emerald-500/15 border border-emerald-400/40 text-emerald-200 hover:bg-emerald-500/25 disabled:opacity-50 transition"
+          >
+            <Sparkles className={`w-3.5 h-3.5 text-emerald-400 ${detecting ? "animate-spin" : ""}`} />
+            {detecting ? t("tilt.detectingBtn") : t("tilt.autoDetectBtn")}
+          </button>
+
+          <button
+            type="button"
             onClick={() => setShowLiveCam((v) => !v)}
             className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium border transition ${
               showLiveCam
@@ -297,6 +355,20 @@ export const CameraTiltCalibrator: React.FC<Props> = ({
           )}
         </div>
       </div>
+
+      {detectNote && (
+        <div
+          className={`px-3 py-1.5 rounded-lg border text-[11px] font-mono ${
+            detectNote.tone === "ok"
+              ? "bg-emerald-500/12 border-emerald-400/35 text-emerald-200"
+              : detectNote.tone === "warn"
+              ? "bg-amber-500/12 border-amber-400/35 text-amber-200"
+              : "bg-rose-500/12 border-rose-400/35 text-rose-200"
+          }`}
+        >
+          {detectNote.text}
+        </div>
+      )}
 
       {/* Main 2D Interactive Visualizations */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-4 items-stretch">
@@ -659,16 +731,27 @@ export const CameraTiltCalibrator: React.FC<Props> = ({
             onChange={(e) => updateField({ orientation_azimuth_deg: Number(e.target.value) })}
             className="w-full accent-sky-400"
           />
-          <div className="flex items-center justify-between text-[11px] text-[#8E95A2]">
-            <span>{t("tilt.rollLabel")}</span>
+          <div className="space-y-1 text-[11px] text-[#8E95A2]">
+            <div className="flex items-center justify-between gap-2">
+              <span>{t("tilt.rollLabel")}</span>
+              <input
+                type="number"
+                min={-45}
+                max={45}
+                step={0.5}
+                value={rollDeg}
+                onChange={(e) => updateField({ orientation_roll_deg: clamp(Number(e.target.value) || 0, -45, 45) })}
+                className="obs-input w-20 py-0.5 text-right font-mono tabular-nums"
+              />
+            </div>
             <input
-              type="number"
-              min={-45}
-              max={45}
-              step={1}
-              value={rollDeg}
-              onChange={(e) => updateField({ orientation_roll_deg: clamp(Number(e.target.value) || 0, -45, 45) })}
-              className="obs-input w-20 py-0.5 text-right font-mono tabular-nums"
+              type="range"
+              min={-25}
+              max={25}
+              step={0.5}
+              value={clamp(rollDeg, -25, 25)}
+              onChange={(e) => updateField({ orientation_roll_deg: Number(e.target.value) })}
+              className="w-full accent-emerald-400"
             />
           </div>
         </div>

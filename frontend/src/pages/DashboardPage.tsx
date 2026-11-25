@@ -1,5 +1,5 @@
-import React, { useCallback, useEffect, useState } from "react";
-import { AlertTriangle, Check, Navigation, Sparkles, Square, Upload, X } from "lucide-react";
+import React, { useState } from "react";
+import { AlertTriangle, Check, Navigation, Upload, X } from "lucide-react";
 import { ProbabilityBars } from "../components/Charts";
 import { SkyStage } from "../components/SkyStage";
 import { useI18n } from "../i18n/I18nContext";

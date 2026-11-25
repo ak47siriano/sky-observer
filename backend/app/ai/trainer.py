@@ -15,6 +15,7 @@ import cv2
 import numpy as np
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from sklearn.metrics import accuracy_score, confusion_matrix, f1_score, precision_score, recall_score
 from torch.utils.data import DataLoader, Dataset
 
@@ -307,6 +308,42 @@ def _build_temporal_sequences(items: list[DatasetItem]) -> list[tuple[np.ndarray
     return samples
 
 
+class _FocalDiceSegLoss(nn.Module):
+    """Combined Focal Cross-Entropy + Multi-Class Soft Dice Loss respecting ignore_index=255."""
+
+    def __init__(self, ignore_index: int = NOT_SKY_IGNORE_INDEX, gamma: float = 1.5) -> None:
+        super().__init__()
+        self.ignore_index = ignore_index
+        self.gamma = gamma
+
+    def forward(self, logits: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
+        valid = targets != self.ignore_index
+        if not torch.any(valid):
+            return logits.sum() * 0.0
+
+        ce = F.cross_entropy(logits, targets, ignore_index=self.ignore_index, reduction="none")
+        valid_f = valid.float()
+        pt = torch.exp(-ce.clamp(max=20.0))
+        focal = (((1.0 - pt) ** self.gamma) * ce * valid_f).sum() / valid_f.sum().clamp(min=1.0)
+
+        num_classes = logits.shape[1]
+        probs = F.softmax(logits, dim=1) * valid_f.unsqueeze(1)
+        safe_targets = torch.where(valid, targets, torch.zeros_like(targets)).clamp(0, num_classes - 1)
+        one_hot = F.one_hot(safe_targets, num_classes=num_classes).permute(0, 3, 1, 2).float() * valid_f.unsqueeze(1)
+
+        dims = (0, 2, 3)
+        inter = torch.sum(probs * one_hot, dim=dims)
+        denom = torch.sum(probs + one_hot, dim=dims)
+        present = torch.sum(one_hot, dim=dims) > 0
+        if torch.any(present):
+            dice_scores = (2.0 * inter[present] + 1e-5) / (denom[present] + 1e-5)
+            dice_loss = 1.0 - dice_scores.mean()
+        else:
+            dice_loss = logits.sum() * 0.0
+
+        return 0.55 * focal + 0.45 * dice_loss
+
+
 class TrainingManager:
     """Manages local background model training, resume, stop, and checkpoint evaluation."""
 
@@ -340,6 +377,7 @@ class TrainingManager:
         async_run: bool = True,
         warm_start_weights: str | None = None,
         device_override: str | None = None,
+        architecture_override: str | None = None,
     ) -> dict[str, Any]:
         cfg = get_config_manager().get()
         pref_dev = device_override or cfg.ai.device
@@ -367,7 +405,12 @@ class TrainingManager:
                 session_id = existing.id
                 arch = existing.architecture
             else:
-                _, arch = build_model_for_family(model_family)
+                _, arch = build_model_for_family(
+                    model_family,
+                    architecture_override,
+                    seg_backbone=str(getattr(cfg.ai, "seg_backbone", "convnext_aspp")),
+                    cls_backbone=str(getattr(cfg.ai, "cls_backbone", "efficientnet_b0")),
+                )
                 sess = TrainingSession(
                     job_id=job_id,
                     model_family=model_family,
@@ -404,6 +447,7 @@ class TrainingManager:
                     auto_activate,
                     warm_start_weights,
                     pref_dev,
+                    architecture_override,
                 ),
                 daemon=True,
             )
@@ -423,6 +467,7 @@ class TrainingManager:
                 auto_activate,
                 warm_start_weights,
                 pref_dev,
+                architecture_override,
             )
 
         return {"job_id": job_id, "session_id": session_id, "model_family": model_family, "device": device}
@@ -444,6 +489,7 @@ class TrainingManager:
         auto_activate: bool,
         warm_start_weights: str | None = None,
         device_override: str | None = None,
+        architecture_override: str | None = None,
     ) -> None:
         cfg = get_config_manager().get()
         device = resolve_device(
@@ -485,18 +531,22 @@ class TrainingManager:
                         seg_binary_phase = True
                 model, arch_name = build_model_for_family(
                     model_family,
+                    architecture_override,
                     num_classes=2 if seg_binary_phase else 5,
                     pretrained=bool(getattr(cfg.ai, "pretrained_backbone", True)),
-                    seg_backbone=str(getattr(cfg.ai, "seg_backbone", "mobilenet_v3_small")),
+                    seg_backbone=str(getattr(cfg.ai, "seg_backbone", "convnext_aspp")),
                 )
             elif model_family == "classification":
                 grp_wmo = bool(getattr(cfg.ai, "group_ambiguous_wmo", False))
                 model, arch_name = build_model_for_family(
                     model_family,
+                    architecture_override,
                     num_classes=len(WMO_GROUPED_CLASSES) if grp_wmo else len(CLOUD_TYPE_CLASSES),
+                    pretrained=bool(getattr(cfg.ai, "pretrained_backbone", True)),
+                    cls_backbone=str(getattr(cfg.ai, "cls_backbone", "efficientnet_b0")),
                 )
             else:
-                model, arch_name = build_model_for_family(model_family, num_horizons=3)
+                model, arch_name = build_model_for_family(model_family, architecture_override, num_horizons=3)
             model = model.to(torch_dev)
             if not resume and warm_start_weights and Path(warm_start_weights).exists():
                 try:
@@ -564,7 +614,7 @@ class TrainingManager:
                 pin_mem = device == "cuda"
                 tr_loader = DataLoader(tr_ds, batch_size=max(1, batch_size), shuffle=True, num_workers=n_workers, pin_memory=pin_mem)
                 va_loader = DataLoader(va_ds, batch_size=max(1, batch_size), shuffle=False, num_workers=n_workers, pin_memory=pin_mem)
-                criterion = nn.CrossEntropyLoss(ignore_index=NOT_SKY_IGNORE_INDEX)
+                criterion = _FocalDiceSegLoss(ignore_index=NOT_SKY_IGNORE_INDEX, gamma=1.5)
                 num_seg_classes = 2 if seg_binary_phase else 5
 
                 for epoch in range(start_epoch + 1, epochs + 1):

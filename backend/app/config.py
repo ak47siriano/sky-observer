@@ -38,6 +38,7 @@ class ServerConfig(BaseModel):
     host: str = "127.0.0.1"
     port: int = Field(default=8080, ge=1, le=65535)
     offline_mode: bool = True
+    setup_completed: bool = False
     cors_origins: list[str] = Field(
         default_factory=lambda: [
             "http://localhost:8080",
@@ -164,7 +165,8 @@ class AIConfig(BaseModel):
     cls_batch_size: int = Field(default=32, ge=1, le=128)
     dataloader_num_workers: int = Field(default=2, ge=0, le=8)
     gradient_accumulation_steps: int = Field(default=1, ge=1, le=16)
-    seg_backbone: Literal["mobilenet_v3_small", "efficientnet_b0", "lightweight"] = "mobilenet_v3_small"
+    seg_backbone: Literal["convnext_aspp", "mobilenet_v3_small", "efficientnet_b0", "lightweight"] = "convnext_aspp"
+    cls_backbone: Literal["efficientnet_b0", "convnext_tiny", "compact"] = "efficientnet_b0"
     pretrained_backbone: bool = True
     group_ambiguous_wmo: bool = False
     event_engine_mode: Literal["hybrid", "deterministic", "neural"] = "hybrid"

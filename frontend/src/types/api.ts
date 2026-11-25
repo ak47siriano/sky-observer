@@ -150,6 +150,8 @@ export interface DatasetSummary {
 export interface SystemStatus {
   version: string;
   offline_mode: boolean;
+  setup_completed?: boolean;
+  observations_count?: number;
   privacy: string;
   hardware: {
     cpu_percent: number;

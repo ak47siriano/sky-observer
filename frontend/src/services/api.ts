@@ -57,6 +57,12 @@ export const api = {
     tilt_correction_enabled?: boolean;
     recalculate_latest?: boolean;
   }) => request<any>("/api/camera/geometry", { method: "PUT", body: JSON.stringify(payload) }),
+  autoDetectCameraTilt: (payload?: {
+    apply?: boolean;
+    fov_horizontal_deg?: number | null;
+    fov_vertical_deg?: number | null;
+    recalculate_latest?: boolean;
+  }) => request<any>("/api/camera/geometry/auto-detect", { method: "POST", body: JSON.stringify(payload || {}) }),
   updateMasks: (payload: { sky_roi_polygon: number[][]; exclusion_polygons: any[] }) =>
     request<any>("/api/camera/masks", { method: "PUT", body: JSON.stringify(payload) }),
   savePaintedExclusionMask: (maskPngBase64: string) =>

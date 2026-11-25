@@ -99,23 +99,44 @@ export const SkyHorizonOverlay: React.FC<SkyHorizonOverlayProps> = ({
       return { el: targetEl, path, mid, pts };
     };
 
+    // Exact 0° horizon half-plane in normalized/canvas coordinates:
+    // d_z(x, y) = A*x + B*y + C <= 0 defines every below-horizon pixel for arbitrary elevation & roll.
+    const planeA = rCam[2] / fx;
+    const planeB = -uCam[2] / fy;
+    const planeC = fCam[2] - (cx / fx) * rCam[2] + (cy / fy) * uCam[2];
+    const clipBelowHorizonBox = (): string | null => {
+      const box: [number, number][] = [
+        [-4, -4],
+        [W + 4, -4],
+        [W + 4, H + 4],
+        [-4, H + 4],
+      ];
+      const evalDz = (p: [number, number]) => planeA * p[0] + planeB * p[1] + planeC;
+      const out: [number, number][] = [];
+      for (let i = 0; i < box.length; i++) {
+        const cur = box[i];
+        const prev = box[(i + box.length - 1) % box.length];
+        const dCur = evalDz(cur);
+        const dPrev = evalDz(prev);
+        const curIn = dCur <= 0;
+        const prevIn = dPrev <= 0;
+        if (curIn !== prevIn) {
+          const denom = dPrev - dCur;
+          const t = Math.abs(denom) > 1e-8 ? dPrev / denom : 0.5;
+          out.push([prev[0] + t * (cur[0] - prev[0]), prev[1] + t * (cur[1] - prev[1])]);
+        }
+        if (curIn) out.push(cur);
+      }
+      if (out.length < 3) return null;
+      return out.map((p) => `${p[0].toFixed(1)},${p[1].toFixed(1)}`).join(" ");
+    };
+
     const horizonCurve = sampleElevationCurve(0);
     const elCurves = [15, 30, 45, 60, 75]
       .map((e) => sampleElevationCurve(e))
       .filter((c): c is NonNullable<typeof c> => c !== null);
 
-    // Below-horizon shaded polygon if horizon is visible inside frame
-    let belowHorizonPoly: string | null = null;
-    if (horizonCurve && horizonCurve.pts.length >= 2) {
-      const first = horizonCurve.pts[0];
-      const last = horizonCurve.pts[horizonCurve.pts.length - 1];
-      const polyPts = [
-        ...horizonCurve.pts.map((p) => `${p[0].toFixed(1)},${p[1].toFixed(1)}`),
-        `${last[0].toFixed(1)},${H + 40}`,
-        `${first[0].toFixed(1)},${H + 40}`,
-      ];
-      belowHorizonPoly = polyPts.join(" ");
-    }
+    const belowHorizonPoly = clipBelowHorizonBox();
 
     // Compass bearing markers at mid-frame or near horizon
     const refEl = Math.max(4, Math.min(60, el - fovV * 0.28));
@@ -140,15 +161,29 @@ export const SkyHorizonOverlay: React.FC<SkyHorizonOverlayProps> = ({
     return { W, H, horizonCurve, belowHorizonPoly, elCurves, compassTicks, zenithPt, sunPt };
   }, [azimuthDeg, elevationDeg, fovHorizontalDeg, fovVerticalDeg, rollDeg, solar]);
 
+  const textHalo: React.CSSProperties = {
+    paintOrder: "stroke",
+    stroke: "rgba(8, 10, 15, 0.92)",
+    strokeWidth: 4,
+    strokeLinejoin: "round",
+  };
+
   return (
     <svg
       viewBox={`0 0 ${overlay.W} ${overlay.H}`}
       preserveAspectRatio="none"
       className={`absolute inset-0 w-full h-full pointer-events-none select-none ${className}`}
     >
-      {/* Below-horizon auto-mask warning shade */}
+      <defs>
+        <linearGradient id="belowHorizonShadeGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+          <stop offset="0%" stopColor="#F43F5E" stopOpacity="0.24" />
+          <stop offset="100%" stopColor="#881337" stopOpacity="0.14" />
+        </linearGradient>
+      </defs>
+
+      {/* Below-horizon auto-mask warning shade (exact for any tilt & roll) */}
       {overlay.belowHorizonPoly && (
-        <polygon points={overlay.belowHorizonPoly} fill="rgba(244, 63, 94, 0.20)" />
+        <polygon points={overlay.belowHorizonPoly} fill="url(#belowHorizonShadeGrad)" />
       )}
 
       {/* Elevation angle curves (15°, 30°, 45°, 60°, 75°) */}
@@ -158,18 +193,19 @@ export const SkyHorizonOverlay: React.FC<SkyHorizonOverlayProps> = ({
             d={c.path}
             fill="none"
             stroke="#38BDF8"
-            strokeOpacity="0.48"
-            strokeWidth="1.5"
+            strokeOpacity="0.58"
+            strokeWidth="1.6"
             strokeDasharray="6 5"
           />
           {c.mid[1] > 18 && c.mid[1] < overlay.H - 18 && (
             <text
               x={Math.min(overlay.W - 44, Math.max(24, c.mid[0]))}
               y={c.mid[1] - 5}
-              fill="#7DD3FC"
+              fill="#E0F2FE"
               fontSize="13"
               fontFamily="monospace"
-              fontWeight="600"
+              fontWeight="700"
+              style={textHalo}
             >
               {c.el}° El
             </text>
@@ -183,17 +219,26 @@ export const SkyHorizonOverlay: React.FC<SkyHorizonOverlayProps> = ({
           <path
             d={overlay.horizonCurve.path}
             fill="none"
+            stroke="rgba(8, 10, 15, 0.72)"
+            strokeWidth="4.4"
+            strokeLinecap="round"
+          />
+          <path
+            d={overlay.horizonCurve.path}
+            fill="none"
             stroke="#FB7185"
             strokeWidth="2.4"
             strokeDasharray="10 5"
+            strokeLinecap="round"
           />
           <text
-            x={Math.min(overlay.W - 110, Math.max(18, overlay.horizonCurve.mid[0] - 40))}
-            y={Math.min(overlay.H - 8, Math.max(18, overlay.horizonCurve.mid[1] - 7))}
-            fill="#FDA4AF"
+            x={Math.min(overlay.W - 115, Math.max(18, overlay.horizonCurve.mid[0] - 42))}
+            y={Math.min(overlay.H - 8, Math.max(18, overlay.horizonCurve.mid[1] - 8))}
+            fill="#FECDD3"
             fontSize="14"
             fontFamily="monospace"
             fontWeight="700"
+            style={textHalo}
           >
             HORIZON 0°
           </text>
@@ -201,12 +246,13 @@ export const SkyHorizonOverlay: React.FC<SkyHorizonOverlayProps> = ({
       )}
 
       {/* Optical Axis Center Reticle */}
-      <g transform={`translate(${overlay.W / 2}, ${overlay.H / 2})`} opacity="0.75">
-        <circle cx="0" cy="0" r="14" fill="none" stroke="#38BDF8" strokeWidth="1.5" />
-        <line x1="-22" y1="0" x2="-8" y2="0" stroke="#38BDF8" strokeWidth="1.5" />
-        <line x1="8" y1="0" x2="22" y2="0" stroke="#38BDF8" strokeWidth="1.5" />
-        <line x1="0" y1="-22" x2="0" y2="-8" stroke="#38BDF8" strokeWidth="1.5" />
-        <line x1="0" y1="8" x2="0" y2="22" stroke="#38BDF8" strokeWidth="1.5" />
+      <g transform={`translate(${overlay.W / 2}, ${overlay.H / 2})`} opacity="0.82">
+        <circle cx="0" cy="0" r="14" fill="none" stroke="rgba(8,10,15,0.7)" strokeWidth="3.2" />
+        <circle cx="0" cy="0" r="14" fill="none" stroke="#38BDF8" strokeWidth="1.6" />
+        <line x1="-22" y1="0" x2="-8" y2="0" stroke="#38BDF8" strokeWidth="1.6" />
+        <line x1="8" y1="0" x2="22" y2="0" stroke="#38BDF8" strokeWidth="1.6" />
+        <line x1="0" y1="-22" x2="0" y2="-8" stroke="#38BDF8" strokeWidth="1.6" />
+        <line x1="0" y1="8" x2="0" y2="22" stroke="#38BDF8" strokeWidth="1.6" />
       </g>
 
       {/* Zenith 90° Marker */}
@@ -215,7 +261,7 @@ export const SkyHorizonOverlay: React.FC<SkyHorizonOverlayProps> = ({
           <circle cx="0" cy="0" r="7" fill="none" stroke="#38BDF8" strokeWidth="2" />
           <line x1="-11" y1="0" x2="11" y2="0" stroke="#38BDF8" strokeWidth="1.5" />
           <line x1="0" y1="-11" x2="0" y2="11" stroke="#38BDF8" strokeWidth="1.5" />
-          <text x="12" y="4" fill="#38BDF8" fontSize="13" fontFamily="monospace" fontWeight="700">
+          <text x="12" y="4" fill="#38BDF8" fontSize="13" fontFamily="monospace" fontWeight="700" style={textHalo}>
             ZENITH 90°
           </text>
         </g>
@@ -230,8 +276,8 @@ export const SkyHorizonOverlay: React.FC<SkyHorizonOverlayProps> = ({
             width="36"
             height="20"
             rx="4"
-            fill="rgba(11, 12, 14, 0.78)"
-            stroke="rgba(56, 189, 248, 0.45)"
+            fill="rgba(11, 12, 14, 0.84)"
+            stroke="rgba(56, 189, 248, 0.55)"
             strokeWidth="1.2"
           />
           <text x="0" y="2" textAnchor="middle" fill="#F4F5F7" fontSize="13" fontFamily="monospace" fontWeight="700">
@@ -253,7 +299,7 @@ export const SkyHorizonOverlay: React.FC<SkyHorizonOverlayProps> = ({
             strokeDasharray="5 3"
           />
           <circle cx="0" cy="0" r="9" fill="#FBBF24" stroke="#0B0C0E" strokeWidth="2" />
-          <text x="14" y="4" fill="#FDE68A" fontSize="13" fontFamily="monospace" fontWeight="700">
+          <text x="14" y="4" fill="#FDE68A" fontSize="13" fontFamily="monospace" fontWeight="700" style={textHalo}>
             ☀ {overlay.sunPt.el.toFixed(0)}°
           </text>
         </g>

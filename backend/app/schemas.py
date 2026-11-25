@@ -21,6 +21,7 @@ class MasksUpdateRequest(BaseModel):
 class TrainModelRequest(BaseModel):
     model_family: Literal["segmentation", "classification", "temporal", "event"]
     dataset_id: int
+    architecture: str | None = None
     epochs: int = Field(default=8, ge=1, le=200)
     batch_size: int | None = Field(default=None, ge=1, le=64)
     learning_rate: float | None = Field(default=None, gt=0.0, le=0.5)
@@ -134,6 +135,13 @@ class CameraGeometryRequest(BaseModel):
     fov_vertical_deg: float | None = Field(default=None, ge=10.0, le=170.0)
     assumed_cloud_altitude_m: float | None = Field(default=None, ge=100.0, le=15000.0)
     tilt_correction_enabled: bool = True
+    recalculate_latest: bool = True
+
+
+class CameraAutoTiltRequest(BaseModel):
+    apply: bool = False
+    fov_horizontal_deg: float | None = Field(default=None, ge=10.0, le=170.0)
+    fov_vertical_deg: float | None = Field(default=None, ge=10.0, le=170.0)
     recalculate_latest: bool = True
 
 

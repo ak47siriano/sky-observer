@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, UTC
 from pathlib import Path
 
 from app.ai.datasets import _render_synthetic_sky_frame
@@ -12,7 +12,7 @@ from app.services.worker import process_and_store_frame
 
 
 def test_forecast_generation_and_chronological_verification(isolated_env):
-    t0 = datetime(2026, 5, 1, 12, 0, 0, tzinfo=timezone.utc)
+    t0 = datetime(2026, 5, 1, 12, 0, 0, tzinfo=UTC)
 
     with get_db_session() as db:
         for i in range(4):
@@ -52,7 +52,7 @@ def test_forecast_generation_and_chronological_verification(isolated_env):
 
 
 def test_storage_retention_protects_training_images(isolated_env):
-    old_ts = datetime.now(timezone.utc) - timedelta(days=90)
+    old_ts = datetime.now(UTC) - timedelta(days=90)
     with get_db_session() as db:
         img1, _, _, _, _ = _render_synthetic_sky_frame("clear_sky", t_step=0, seed=1, width=128, height=128)
         img2, _, _, _, _ = _render_synthetic_sky_frame("cumulus", t_step=0, seed=2, width=128, height=128)

@@ -4,8 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import base64
-import csv
-import io
 import json
 import os
 import threading
@@ -43,7 +41,6 @@ from app.camera.manager import get_camera_manager
 from app.config import get_config_manager
 from app.database import get_db, get_db_session, init_database
 from app.forecast.engine import generate_forecasts_for_observation
-from app.forecast.verification import compute_verification_summary
 from app.models_db import (
     DatasetItem,
     DatasetRecord,
@@ -58,15 +55,13 @@ from app.schemas import (
     ActivateModelRequest,
     AutoTrainConfigRequest,
     AutoTrainRunRequest,
+    CameraAutoTiltRequest,
     CameraGeometryRequest,
     CameraTestRequest,
-    DailyDigestRequest,
     DataPurgeRequest,
     DatasetExportRequest,
     DatasetImportRequest,
     DatasetLabelRequest,
-    EventFeedbackRequest,
-    EventsClearRequest,
     HardwareProfileRequest,
     MapPrefetchRequest,
     MasksUpdateRequest,
@@ -76,8 +71,6 @@ from app.schemas import (
     RollbackModelRequest,
     SecondaryCamerasUpdateRequest,
     SystemModeRequest,
-    TimelapseClearRequest,
-    TimelapseExportRequest,
     TrainModelRequest,
 )
 from app.services.map_tiles import get_tile_bytes, get_tile_cache_stats, prefetch_tiles_around
@@ -87,12 +80,6 @@ from app.services.storage import (
     get_storage_stats,
     purge_storage_targets,
 )
-from app.services.timelapse import (
-    clear_timelapse_frames,
-    export_timelapse_video,
-    generate_daily_digest,
-    list_daily_digests,
-)
 from app.services.weather_online import get_online_weather_service
 from app.services.worker import get_broadcaster, get_worker, observation_to_dict, process_and_store_frame
 from app.vision.coverage import compute_cloud_coverage
@@ -101,6 +88,7 @@ from app.vision.geometry import (
     compute_pixel_geometry_maps,
     compute_radar_footprint,
     compute_solar_position,
+    estimate_camera_tilt_from_frame,
     geometry_from_camera_config,
     project_mask_to_radar_bgra,
     project_sky_angles_to_image,
@@ -603,6 +591,7 @@ def api_models_train(req: TrainModelRequest) -> dict[str, Any]:
             auto_activate=req.auto_activate,
             async_run=True,
             device_override=req.device,
+            architecture_override=req.architecture,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -1144,6 +1133,8 @@ def api_system_status(db: Session = Depends(get_db)) -> dict[str, Any]:
     return {
         "version": __version__,
         "offline_mode": cfg.server.offline_mode,
+        "setup_completed": bool(cfg.server.setup_completed),
+        "observations_count": db.query(Observation).count(),
         "privacy": (
             "100% local execution; zero external APIs or telemetry"
             if cfg.server.offline_mode
@@ -1286,25 +1277,15 @@ def _extract_camera_cloud_grid(obs: Observation | None, grid_size: int = 12) -> 
     return grid
 
 
-@app.put("/api/camera/geometry")
-def api_camera_geometry_put(req: CameraGeometryRequest, db: Session = Depends(get_db)) -> dict[str, Any]:
-    patch: dict[str, Any] = {
-        "orientation_elevation_deg": req.orientation_elevation_deg,
-        "orientation_azimuth_deg": req.orientation_azimuth_deg,
-        "orientation_roll_deg": req.orientation_roll_deg,
-        "tilt_correction_enabled": req.tilt_correction_enabled,
-    }
-    if req.fov_horizontal_deg is not None:
-        patch["fov_horizontal_deg"] = req.fov_horizontal_deg
-    if req.fov_vertical_deg is not None:
-        patch["fov_vertical_deg"] = req.fov_vertical_deg
-    if "assumed_cloud_altitude_m" in req.model_fields_set:
-        patch["assumed_cloud_altitude_m"] = req.assumed_cloud_altitude_m
-
+def _apply_camera_geometry_and_recalculate(
+    db: Session,
+    patch: dict[str, Any],
+    recalculate_latest: bool = True,
+) -> dict[str, Any]:
     updated = get_config_manager().update({"camera": patch})
     recalculated_obs_id: int | None = None
 
-    if req.recalculate_latest:
+    if recalculate_latest:
         obs = db.query(Observation).filter(Observation.is_usable.is_(True)).order_by(Observation.id.desc()).first()
         if obs is not None and obs.seg_mask_path and Path(obs.seg_mask_path).exists():
             seg_mask = cv2.imread(obs.seg_mask_path, cv2.IMREAD_GRAYSCALE)
@@ -1424,6 +1405,67 @@ def api_camera_geometry_put(req: CameraGeometryRequest, db: Session = Depends(ge
         "recalculated_observation_id": recalculated_obs_id,
         "camera_projection": proj,
     }
+
+
+@app.put("/api/camera/geometry")
+def api_camera_geometry_put(req: CameraGeometryRequest, db: Session = Depends(get_db)) -> dict[str, Any]:
+    patch: dict[str, Any] = {
+        "orientation_elevation_deg": req.orientation_elevation_deg,
+        "orientation_azimuth_deg": req.orientation_azimuth_deg,
+        "orientation_roll_deg": req.orientation_roll_deg,
+        "tilt_correction_enabled": req.tilt_correction_enabled,
+    }
+    if req.fov_horizontal_deg is not None:
+        patch["fov_horizontal_deg"] = req.fov_horizontal_deg
+    if req.fov_vertical_deg is not None:
+        patch["fov_vertical_deg"] = req.fov_vertical_deg
+    if "assumed_cloud_altitude_m" in req.model_fields_set:
+        patch["assumed_cloud_altitude_m"] = req.assumed_cloud_altitude_m
+
+    return _apply_camera_geometry_and_recalculate(db, patch, recalculate_latest=req.recalculate_latest)
+
+
+@app.post("/api/camera/geometry/auto-detect")
+def api_camera_geometry_auto_detect(
+    req: CameraAutoTiltRequest | None = None,
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    cfg = get_config_manager().get()
+    req_obj = req or CameraAutoTiltRequest()
+    frame_bgr: np.ndarray | None = None
+
+    latest_obs = db.query(Observation).filter(Observation.is_usable.is_(True)).order_by(Observation.id.desc()).first()
+    if latest_obs is not None and latest_obs.raw_path and Path(latest_obs.raw_path).exists():
+        frame_bgr = cv2.imread(latest_obs.raw_path)
+
+    if frame_bgr is None or frame_bgr.size == 0:
+        cap = get_camera_manager().capture_once(cfg.camera, bypass_backoff=True)
+        if cap.ok and cap.frame is not None and cap.frame.size > 0:
+            frame_bgr = cap.frame
+
+    if frame_bgr is None or frame_bgr.size == 0:
+        raise HTTPException(status_code=404, detail="No camera frame available for automatic horizon detection")
+
+    fov_h = float(req_obj.fov_horizontal_deg or cfg.camera.fov_horizontal_deg or 72.0)
+    fov_v = req_obj.fov_vertical_deg if req_obj.fov_vertical_deg is not None else cfg.camera.fov_vertical_deg
+    est = estimate_camera_tilt_from_frame(frame_bgr, fov_horizontal_deg=fov_h, fov_vertical_deg=fov_v)
+
+    result: dict[str, Any] = {
+        **est,
+        "applied": bool(req_obj.apply),
+    }
+    if req_obj.apply:
+        applied_res = _apply_camera_geometry_and_recalculate(
+            db,
+            {
+                "orientation_elevation_deg": est["orientation_elevation_deg"],
+                "orientation_roll_deg": est["orientation_roll_deg"],
+                "tilt_correction_enabled": True,
+            },
+            recalculate_latest=req_obj.recalculate_latest,
+        )
+        result["geometry"] = applied_res
+    return result
 
 
 @app.put("/api/radar/location")

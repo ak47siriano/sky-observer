@@ -20,11 +20,16 @@ const PURGE_CATEGORIES = [
   { id: "reset_config", color: "#94A3B8" },
 ] as const;
 
-export const SettingsPage: React.FC<{ system: SystemStatus | null; onConfigSaved: () => void }> = ({
+export const SettingsPage: React.FC<{
+  system: SystemStatus | null;
+  onConfigSaved: () => void;
+  onOpenSetupWizard?: () => void;
+}> = ({
   system,
   onConfigSaved,
+  onOpenSetupWizard,
 }) => {
-  const { t, tEnum } = useI18n();
+  const { t, tEnum, locale } = useI18n();
   const [cfg, setCfg] = useState<any>(null);
   const [devices, setDevices] = useState<any[]>([]);
   const [testResult, setTestResult] = useState<any>(null);
@@ -200,11 +205,20 @@ export const SettingsPage: React.FC<{ system: SystemStatus | null; onConfigSaved
             <h2 className="text-base font-semibold text-white">{t("settings.title")}</h2>
             <p className="text-xs text-[#8E95A2]">{t("settings.subtitle")}</p>
           </div>
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-2.5">
             {saveMsg && (
               <span className="inline-flex items-center gap-1 text-xs text-emerald-400">
                 <CheckCircle className="w-3.5 h-3.5" /> {saveMsg}
               </span>
+            )}
+            {onOpenSetupWizard && (
+              <button
+                type="button"
+                onClick={onOpenSetupWizard}
+                className="obs-btn-secondary inline-flex items-center gap-1.5 px-3 py-2 text-xs"
+              >
+                {locale === "it" ? "Configurazione Guidata" : "Guided Setup Wizard"}
+              </button>
             )}
             <button
               type="submit"

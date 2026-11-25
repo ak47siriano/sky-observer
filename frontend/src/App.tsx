@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import {
   Bell,
   CloudSun,
@@ -12,6 +12,7 @@ import {
   Settings,
 } from "lucide-react";
 import { ManualModal } from "./components/ManualModal";
+import { SetupWizardModal } from "./components/SetupWizardModal";
 import { useI18n } from "./i18n/I18nContext";
 import { api } from "./services/api";
 import type { EventAlert, ForecastItem, Observation, SystemStatus } from "./types/api";
@@ -44,7 +45,21 @@ export function App() {
   const [busy, setBusy] = useState(false);
   const [toast, setToast] = useState<string>("");
   const [manualOpen, setManualOpen] = useState(false);
+  const [wizardOpen, setWizardOpen] = useState(false);
+  const [wizardAutoDismissed, setWizardAutoDismissed] = useState(false);
   const [utcTime, setUtcTime] = useState<string>(() => new Date().toISOString().slice(11, 19));
+
+  useEffect(() => {
+    if (
+      system &&
+      system.setup_completed === false &&
+      (system.observations_count ?? 0) === 0 &&
+      !system.camera?.connected &&
+      !wizardAutoDismissed
+    ) {
+      setWizardOpen(true);
+    }
+  }, [system, wizardAutoDismissed]);
 
   useEffect(() => {
     const clockId = window.setInterval(() => {
@@ -364,7 +379,13 @@ export function App() {
         {page === "forecast" && <AnalyticsPage forecasts={forecasts} />}
         {page === "events" && <EventsPage events={events} onRefresh={refreshAll} />}
         {page === "ai" && <AiStudioPage />}
-        {page === "settings" && <SettingsPage system={system} onConfigSaved={refreshAll} />}
+        {page === "settings" && (
+          <SettingsPage
+            system={system}
+            onConfigSaved={refreshAll}
+            onOpenSetupWizard={() => setWizardOpen(true)}
+          />
+        )}
       </main>
 
       {/* Mobile Bottom App Tab Bar (PWA-native feel) */}
@@ -391,6 +412,22 @@ export function App() {
       </nav>
 
       <ManualModal open={manualOpen} currentPage={page} onClose={() => setManualOpen(false)} />
+
+      <SetupWizardModal
+        open={wizardOpen}
+        system={system}
+        onClose={() => {
+          setWizardOpen(false);
+          setWizardAutoDismissed(true);
+        }}
+        onCompleted={(targetPage) => {
+          setWizardOpen(false);
+          setWizardAutoDismissed(true);
+          refreshAll();
+          if (targetPage) setPage(targetPage);
+          showToast(locale === "it" ? "Configurazione stazione completata" : "Station setup completed");
+        }}
+      />
 
       {toast && (
         <div className="fixed bottom-20 sm:bottom-5 right-5 z-50 obs-glass-pill border-sky-400/30 px-4 py-2.5 text-xs text-sky-100 flex items-center gap-2">

@@ -15,6 +15,7 @@ from app.config import CameraConfig
 
 DEFAULT_PROJECTION_CLOUD_ALTITUDE_M = 2000.0
 MIN_HORIZON_ELEVATION_DEG = 2.0
+RADAR_EDGE_MIN_EL_DEG = 3.5
 MIN_FLOW_ELEVATION_DEG = 8.0
 MAX_RADAR_PROJECTION_KM = 28.0
 
@@ -319,10 +320,37 @@ def compute_sun_glare_mask(
     max_angle_deg: float = 3.5,
 ) -> np.ndarray:
     """Return boolean mask (H, W) of pixels within max_angle_deg of the solar disk."""
+    prior = compute_sun_aureole_prior(
+        width=width,
+        height=height,
+        geom=geom,
+        sun_azimuth_deg=sun_azimuth_deg,
+        sun_elevation_deg=sun_elevation_deg,
+        core_deg=max_angle_deg,
+        halo_deg=max_angle_deg,
+    )
+    return prior >= 0.99
+
+
+def compute_sun_aureole_prior(
+    width: int,
+    height: int,
+    geom: CameraGeometry,
+    sun_azimuth_deg: float,
+    sun_elevation_deg: float,
+    core_deg: float = 3.5,
+    halo_deg: float = 14.0,
+) -> np.ndarray:
+    """
+    Return smooth float32 map (H, W) in [0..1] encoding angular proximity to the sun:
+      - 1.0 inside core_deg
+      - smooth cosine/quadratic falloff from core_deg to halo_deg
+      - 0.0 beyond halo_deg or when sun is below horizon.
+    """
     w = max(1, int(width))
     h = max(1, int(height))
-    if sun_elevation_deg <= 2.0:
-        return np.zeros((h, w), dtype=bool)
+    if sun_elevation_deg <= 0.5:
+        return np.zeros((h, w), dtype=np.float32)
 
     r_cam, u_cam, f_cam = camera_basis_enu(geom.elevation_deg, geom.azimuth_deg, geom.roll_deg)
     fx, fy, cx, cy = focal_lengths_px(w, h, geom)
@@ -332,19 +360,28 @@ def compute_sun_glare_mask(
         [math.cos(el_r) * math.sin(az_r), math.cos(el_r) * math.cos(az_r), math.sin(el_r)],
         dtype=np.float64,
     )
-    # Express sun vector in camera frame (r_cam, u_cam, f_cam)
     sx = float(np.dot(sun_vec, r_cam))
     sy = float(np.dot(sun_vec, u_cam))
     sz = float(np.dot(sun_vec, f_cam))
     if sz <= 0.0:
-        return np.zeros((h, w), dtype=bool)
+        return np.zeros((h, w), dtype=np.float32)
 
     vv, uu = np.mgrid[0:h, 0:w].astype(np.float32)
     xc = (uu - cx) / float(fx)
     yc = (cy - vv) / float(fy)
     d_norm = np.sqrt(1.0 + xc * xc + yc * yc)
-    cos_ang = (xc * sx + yc * sy + sz) / d_norm
-    return cos_ang >= math.cos(math.radians(max_angle_deg))
+    cos_ang = np.clip((xc * sx + yc * sy + sz) / d_norm, -1.0, 1.0)
+    ang_deg = np.degrees(np.arccos(cos_ang))
+
+    core = max(0.5, float(core_deg))
+    halo = max(core, float(halo_deg))
+    if halo <= core + 1e-3:
+        return (ang_deg <= core).astype(np.float32)
+
+    t = np.clip((halo - ang_deg) / (halo - core), 0.0, 1.0)
+    # 1.0 inside core, smooth squared falloff across Mie scattering halo
+    prior = np.where(ang_deg <= core, 1.0, t * t)
+    return prior.astype(np.float32)
 
 
 def with_cloud_altitude(geom: CameraGeometry, cloud_altitude_m: float) -> CameraGeometry:
@@ -368,11 +405,14 @@ def compute_radar_footprint(
     r_cam, u_cam, f_cam = camera_basis_enu(geom.elevation_deg, geom.azimuth_deg, geom.roll_deg)
     fx, fy, cx, cy = focal_lengths_px(w, h, geom)
     max_m = MAX_RADAR_PROJECTION_KM * 1000.0
-    sin_edge_min = math.sin(math.radians(4.0))
+    sin_edge_min = math.sin(math.radians(RADAR_EDGE_MIN_EL_DEG))
     alt = geom.cloud_altitude_m
-    # Physically consistent horizon cap: proportional to cloud altitude (alt / tan(4 deg)),
+    # Physically consistent horizon cap: proportional to cloud altitude (alt / tan(RADAR_EDGE_MIN_EL_DEG)),
     # at least radar_radius_km, and capped at MAX_RADAR_PROJECTION_KM.
-    horizon_cap_m = min(max_m, max(float(radar_radius_km) * 1000.0, alt / math.tan(math.radians(4.0))))
+    horizon_cap_m = min(
+        max_m,
+        max(float(radar_radius_km) * 1000.0, alt / math.tan(math.radians(RADAR_EDGE_MIN_EL_DEG))),
+    )
 
     def _ray_en(u_px: float, v_px: float) -> tuple[float, float, float]:
         xc = (u_px - cx) / fx
@@ -652,9 +692,237 @@ def project_mask_to_radar_bgra(
     )
     warped_stack[~in_fov] = 0.0
 
-    # Gentle radial outer-rim fade (only past 82% of radar radius) so low-elevation cameras keep full visibility
+    # Combine physical elevation taper (prevents extreme radial streaking below 5 deg) with outer-rim radial fade
     horiz_dist = np.hypot(east_grid, north_grid).astype(np.float32)
+    el_deg_grid = np.degrees(np.arctan2(geom.cloud_altitude_m, np.maximum(horiz_dist, 1.0))).astype(np.float32)
+    el_t = np.clip((el_deg_grid - MIN_HORIZON_ELEVATION_DEG) / 5.5, 0.0, 1.0)
+    el_fade = el_t * el_t * (3.0 - 2.0 * el_t)
     radial_norm = horiz_dist / max(float(r_m), 1.0)
-    horizon_fade = np.clip((1.0 - radial_norm) / 0.18, 0.0, 1.0)
+    radial_fade = np.clip((1.0 - radial_norm) / 0.18, 0.0, 1.0)
+    horizon_fade = (el_fade * radial_fade).astype(np.float32)
 
     return _render_volumetric_cloud_bgra(warped_stack, fov_mask=in_fov, horizon_fade=horizon_fade)
+
+
+def estimate_camera_tilt_from_frame(
+    image_bgr: np.ndarray,
+    fov_horizontal_deg: float = 72.0,
+    fov_vertical_deg: float | None = None,
+) -> dict[str, Any]:
+    """
+    Automatically estimate camera elevation (pitch above horizon) and roll angle
+    directly from a captured sky/horizon frame using sky-vs-terrain affinity contrast
+    and robust outlier-resistant line fitting across vertical image strips.
+    """
+    if image_bgr is None or image_bgr.size == 0 or image_bgr.ndim < 3:
+        return {
+            "detected_horizon": False,
+            "mode": "zenith_sky_only",
+            "orientation_elevation_deg": 85.0,
+            "orientation_roll_deg": 0.0,
+            "tilt_from_vertical_deg": 5.0,
+            "horizon_y_norm": None,
+            "below_horizon_pct": 0.0,
+            "confidence": 0.2,
+        }
+
+    h, w = image_bgr.shape[:2]
+    fov_h = max(10.0, min(170.0, float(fov_horizontal_deg or 72.0)))
+    if fov_vertical_deg is None or fov_vertical_deg <= 0:
+        tan_v = math.tan(math.radians(fov_h) / 2.0) * (float(h) / max(1.0, float(w)))
+        fov_v = math.degrees(2.0 * math.atan(tan_v))
+    else:
+        fov_v = max(10.0, min(170.0, float(fov_vertical_deg)))
+
+    work_w = min(320, max(96, w))
+    work_h = max(72, int(round(work_w * float(h) / max(1.0, float(w)))))
+    small = cv2.resize(image_bgr, (work_w, work_h), interpolation=cv2.INTER_AREA)
+
+    lab = cv2.cvtColor(small, cv2.COLOR_BGR2LAB).astype(np.float32)
+    hsv = cv2.cvtColor(small, cv2.COLOR_BGR2HSV).astype(np.float32)
+    L_norm = lab[:, :, 0] / 255.0
+    a_norm = lab[:, :, 1] / 255.0
+    b_norm = lab[:, :, 2] / 255.0
+    S_norm = hsv[:, :, 1] / 255.0
+
+    bgr_f = small.astype(np.float32) / 255.0
+    blue_minus_red = bgr_f[:, :, 0] - bgr_f[:, :, 2]
+
+    # Terrain/urban chrominance penalty: terracotta roofs (+a/+b), foliage (-a/+b), strong saturation
+    warm_or_green = (
+        np.maximum(a_norm - 0.52, 0.0) * 2.2
+        + np.maximum(0.48 - a_norm, 0.0) * 1.9
+        + np.maximum(b_norm - 0.56, 0.0) * 1.5
+    )
+
+    # High-frequency structural texture (buildings/trees have sharp edges compared to cloud/sky regions)
+    gray = cv2.cvtColor(small, cv2.COLOR_BGR2GRAY).astype(np.float32) / 255.0
+    gx = cv2.Sobel(gray, cv2.CV_32F, 1, 0, ksize=3)
+    gy = cv2.Sobel(gray, cv2.CV_32F, 0, 1, ksize=3)
+    grad_mag = cv2.GaussianBlur(np.hypot(gx, gy), (0, 0), sigmaX=2.0)
+    tex_norm = np.clip(grad_mag / 0.45, 0.0, 1.0)
+
+    # Vertical top-bright -> bottom-dark edge response reinforces horizon boundaries
+    down_edge = np.clip(cv2.Sobel(L_norm, cv2.CV_32F, 0, 1, ksize=3) * -1.0, 0.0, 1.0)
+    down_edge = cv2.GaussianBlur(down_edge, (0, 0), sigmaX=1.5)
+
+    sky_affinity = (
+        0.58 * L_norm
+        + 0.32 * np.clip(blue_minus_red + 0.25, 0.0, 1.0)
+        - 0.48 * warm_or_green
+        - 0.40 * tex_norm
+        - 0.16 * S_norm
+    ).astype(np.float32)
+
+    n_cols = 48
+    xs_cols = np.linspace(0, work_w, n_cols + 1, dtype=int)
+    col_x = np.array([(xs_cols[i] + xs_cols[i + 1]) * 0.5 for i in range(n_cols)], dtype=np.float64)
+    S_strip = np.zeros((work_h, n_cols), dtype=np.float64)
+    L_strip = np.zeros((work_h, n_cols), dtype=np.float64)
+    G_strip = np.zeros((work_h, n_cols), dtype=np.float64)
+
+    for i in range(n_cols):
+        x0, x1 = int(xs_cols[i]), max(int(xs_cols[i]) + 1, int(xs_cols[i + 1]))
+        S_strip[:, i] = np.mean(sky_affinity[:, x0:x1], axis=1)
+        L_strip[:, i] = np.mean(L_norm[:, x0:x1], axis=1)
+        G_strip[:, i] = np.mean(down_edge[:, x0:x1], axis=1)
+
+    y_min = max(6, int(round(0.08 * work_h)))
+    y_max = min(work_h - 6, int(round(0.95 * work_h)))
+    if y_max <= y_min + 2:
+        y_min, y_max = 2, max(4, work_h - 2)
+
+    ys = np.arange(y_min, y_max, dtype=np.float64)[:, None]
+    cs_S = np.cumsum(S_strip, axis=0)
+    cs_L = np.cumsum(L_strip, axis=0)
+    tot_S = cs_S[-1:, :]
+    tot_L = cs_L[-1:, :]
+
+    above_S = cs_S[y_min:y_max, :] / np.maximum(ys + 1.0, 1.0)
+    below_S = (tot_S - cs_S[y_min:y_max, :]) / np.maximum(float(work_h - 1) - ys, 1.0)
+    above_L = cs_L[y_min:y_max, :] / np.maximum(ys + 1.0, 1.0)
+    below_L = (tot_L - cs_L[y_min:y_max, :]) / np.maximum(float(work_h - 1) - ys, 1.0)
+
+    # Strong positive contrast requires sky above and terrain below
+    sep_scores = (above_S - below_S) + 0.35 * (above_L - below_L) + 0.14 * G_strip[y_min:y_max, :]
+    best_rel_idx = np.argmax(sep_scores, axis=0)
+    best_y = (best_rel_idx + y_min).astype(np.float64)
+    best_sep = sep_scores[best_rel_idx, np.arange(n_cols)]
+
+    strong_mask = best_sep >= 0.13
+    n_strong = int(np.count_nonzero(strong_mask))
+    med_sep = float(np.median(best_sep[strong_mask])) if n_strong > 0 else float(np.median(best_sep))
+    med_y_norm = float(np.median(best_y[strong_mask]) / work_h) if n_strong > 0 else 1.0
+
+    # Check if bottom border itself is textured terrain/roof or open sky
+    bottom_sky_diff = float(np.mean(S_strip[: max(4, work_h // 6), :]) - np.mean(S_strip[-max(4, work_h // 6) :, :]))
+
+    if n_strong < max(10, int(0.32 * n_cols)) or (med_sep < 0.17 and bottom_sky_diff < 0.16) or med_y_norm > 0.935:
+        zenith_geom = CameraGeometry(
+            elevation_deg=85.0,
+            azimuth_deg=0.0,
+            roll_deg=0.0,
+            fov_horizontal_deg=fov_h,
+            fov_vertical_deg=fov_v,
+            cloud_altitude_m=DEFAULT_PROJECTION_CLOUD_ALTITUDE_M,
+            tilt_correction_enabled=True,
+        )
+        zenith_maps = compute_pixel_geometry_maps(64, 48, zenith_geom)
+        return {
+            "detected_horizon": False,
+            "mode": "zenith_sky_only",
+            "orientation_elevation_deg": 85.0,
+            "orientation_roll_deg": 0.0,
+            "tilt_from_vertical_deg": 5.0,
+            "horizon_y_norm": None,
+            "below_horizon_pct": float(zenith_maps["below_horizon_pct"]),
+            "confidence": round(float(np.clip(0.82 - max(0.0, med_sep) * 1.5, 0.45, 0.90)), 2),
+        }
+
+    x_pts = col_x[strong_mask]
+    y_pts = best_y[strong_mask]
+    w_pts = np.clip(best_sep[strong_mask], 0.1, 1.5)
+
+    # Deterministic pair-consensus (RANSAC-like) horizon line fit immune to narrow skyscraper spikes
+    tol_px = max(4.0, 0.045 * work_h)
+    best_line = (0.0, float(np.percentile(y_pts, 58)))  # (slope, intercept_at_cx)
+    best_consensus = -1.0
+    cx_w = work_w / 2.0
+    m_pts = len(x_pts)
+    step_pair = 1 if m_pts <= 24 else 2
+    for i in range(0, m_pts, step_pair):
+        for j in range(i + 2, m_pts, step_pair):
+            dx = x_pts[j] - x_pts[i]
+            if abs(dx) < work_w * 0.18:
+                continue
+            slope_cand = (y_pts[j] - y_pts[i]) / dx
+            # Reject extreme implausible camera rolls (> ~42 deg)
+            if abs(slope_cand) > 0.90:
+                continue
+            b_cand = y_pts[i] + slope_cand * (cx_w - x_pts[i])
+            pred = b_cand + slope_cand * (x_pts - cx_w)
+            res = y_pts - pred
+            # Urban skyline preference: tolerate slight upward buildings less than coherent ground base
+            inlier = np.abs(res) <= tol_px
+            score = float(np.sum(w_pts[inlier] * (1.0 - 0.5 * (np.abs(res[inlier]) / tol_px))))
+            if score > best_consensus:
+                best_consensus = score
+                best_line = (float(slope_cand), float(b_cand))
+
+    slope_fit, b_fit = best_line
+    # Refine with weighted least-squares on final inliers (with slight IRLS passes)
+    for _ in range(3):
+        pred = b_fit + slope_fit * (x_pts - cx_w)
+        abs_res = np.abs(y_pts - pred)
+        inliers = abs_res <= tol_px * 1.25
+        if np.count_nonzero(inliers) < 4:
+            break
+        dx_in = x_pts[inliers] - cx_w
+        y_in = y_pts[inliers]
+        huber_w = w_pts[inliers] / np.maximum(1.0, abs_res[inliers] / (0.5 * tol_px))
+        # Downweight isolated sharp upward spikes (towers) slightly relative to horizon base
+        res_in = y_in - (b_fit + slope_fit * dx_in)
+        huber_w = np.where(res_in < -tol_px * 0.45, huber_w * 0.65, huber_w)
+        sw = float(np.sum(huber_w))
+        if sw <= 1e-6:
+            break
+        x_mean = float(np.sum(huber_w * dx_in) / sw)
+        y_mean = float(np.sum(huber_w * y_in) / sw)
+        denom = float(np.sum(huber_w * (dx_in - x_mean) ** 2))
+        if denom > 1e-3:
+            slope_new = float(np.sum(huber_w * (dx_in - x_mean) * (y_in - y_mean)) / denom)
+            if abs(slope_new) <= 0.90:
+                slope_fit = slope_new
+        b_fit = y_mean - slope_fit * x_mean
+
+    base_geom = CameraGeometry(0.0, 0.0, 0.0, fov_h, fov_v, DEFAULT_PROJECTION_CLOUD_ALTITUDE_M, True)
+    fx_w, fy_w, _, cy_w = focal_lengths_px(work_w, work_h, base_geom)
+
+    roll_rad = math.atan(-(fy_w / fx_w) * slope_fit)
+    roll_deg = round(max(-45.0, min(45.0, math.degrees(roll_rad))), 1)
+    el_rad = math.atan(((b_fit - cy_w) / fy_w) * math.cos(roll_rad))
+    el_deg = round(max(-20.0, min(88.0, math.degrees(el_rad))), 1)
+
+    est_geom = CameraGeometry(
+        elevation_deg=el_deg,
+        azimuth_deg=0.0,
+        roll_deg=roll_deg,
+        fov_horizontal_deg=fov_h,
+        fov_vertical_deg=fov_v,
+        cloud_altitude_m=DEFAULT_PROJECTION_CLOUD_ALTITUDE_M,
+        tilt_correction_enabled=True,
+    )
+    est_maps = compute_pixel_geometry_maps(64, 48, est_geom)
+    inlier_frac = float(np.count_nonzero(np.abs(y_pts - (b_fit + slope_fit * (x_pts - cx_w))) <= tol_px * 1.25)) / max(1, m_pts)
+    conf = float(np.clip(0.45 * min(1.0, med_sep / 0.42) + 0.35 * inlier_frac + 0.20 * (n_strong / n_cols), 0.25, 0.97))
+
+    return {
+        "detected_horizon": True,
+        "mode": "horizon_visible",
+        "orientation_elevation_deg": el_deg,
+        "orientation_roll_deg": roll_deg,
+        "tilt_from_vertical_deg": round(max(0.0, 90.0 - el_deg), 1),
+        "horizon_y_norm": round(float(np.clip(b_fit / work_h, 0.0, 1.2)), 4),
+        "below_horizon_pct": float(est_maps["below_horizon_pct"]),
+        "confidence": round(conf, 2),
+    }

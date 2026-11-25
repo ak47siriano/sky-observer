@@ -16,7 +16,7 @@ from app.vision.coverage import compute_cloud_coverage
 from app.vision.geometry import (
     compute_pixel_geometry_maps,
     compute_solar_position,
-    compute_sun_glare_mask,
+    compute_sun_aureole_prior,
     geometry_from_camera_config,
 )
 from app.vision.masking import build_valid_sky_mask_from_config, neutralize_excluded_pixels
@@ -82,6 +82,7 @@ def run_vision_pipeline(
     dt_seconds: float = 5.0,
     seg_model: torch.nn.Module | None = None,
     seg_model_name: str = "radiometric-physics-v1",
+    seg_nn_weight: float = 0.75,
     cls_model: torch.nn.Module | None = None,
     cls_model_name: str = "physical-heuristic-v1",
     device: str = "cpu",
@@ -93,30 +94,21 @@ def run_vision_pipeline(
     geo_maps = compute_pixel_geometry_maps(w, h, geom)
     valid_mask = build_valid_sky_mask_from_config((h, w), config.camera)
     solar = compute_solar_position(config.camera.latitude, config.camera.longitude)
+    sun_prior_map: np.ndarray | None = None
     if geom.tilt_correction_enabled:
         horizon_masked = np.where(geo_maps["above_horizon"], valid_mask, 0).astype(np.uint8)
         if int(np.count_nonzero(horizon_masked)) >= max(100, int(0.05 * h * w)):
             valid_mask = horizon_masked
-        if solar["is_daylight"] and float(solar["elevation_deg"]) > 2.0:
-            glare_zone = compute_sun_glare_mask(
+        if solar["is_daylight"] and float(solar["elevation_deg"]) > 0.5:
+            sun_prior_map = compute_sun_aureole_prior(
                 w,
                 h,
                 geom,
                 float(solar["azimuth_deg"]),
                 float(solar["elevation_deg"]),
-                max_angle_deg=3.5,
+                core_deg=3.5,
+                halo_deg=14.0,
             )
-            if np.any(glare_zone):
-                sun_core = (
-                    glare_zone
-                    & (image_bgr[:, :, 0] > 246)
-                    & (image_bgr[:, :, 1] > 246)
-                    & (image_bgr[:, :, 2] > 246)
-                )
-                if np.any(sun_core):
-                    glare_masked = np.where(sun_core, 0, valid_mask).astype(np.uint8)
-                    if int(np.count_nonzero(glare_masked)) >= max(100, int(0.05 * h * w)):
-                        valid_mask = glare_masked
 
     # 7.1 Image quality assessment
     if config.vision.image_quality_check_enabled:
@@ -191,6 +183,8 @@ def run_vision_pipeline(
         seg_model=seg_model if config.vision.cloud_segmentation_enabled else None,
         device=device,
         model_name=seg_model_name,
+        sun_prior_map=sun_prior_map,
+        nn_weight=seg_nn_weight,
     )
 
     # 7.4 Cloud coverage

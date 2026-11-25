@@ -73,6 +73,7 @@ def get_broadcaster() -> LiveBroadcaster:
 
 
 def observation_to_dict(obs: Observation) -> dict[str, Any]:
+    cov_data = safe_json_loads(obs.coverage_metrics_json, {})
     return {
         "id": obs.id,
         "captured_at": obs.captured_at.isoformat() if obs.captured_at else None,
@@ -87,9 +88,10 @@ def observation_to_dict(obs: Observation) -> dict[str, Any]:
         "thin_cloud_pct": obs.thin_cloud_pct,
         "dense_cloud_pct": obs.dense_cloud_pct,
         "dark_cloud_pct": obs.dark_cloud_pct,
+        "sun_glare_pct": float(cov_data.get("sun_glare_pct", 0.0)),
         "haze_fog_pct": obs.haze_fog_pct,
         "uncertainty_pct": obs.uncertainty_pct,
-        "coverage": safe_json_loads(obs.coverage_metrics_json, {}),
+        "coverage": cov_data,
         "dominant_cloud_type": obs.dominant_cloud_type,
         "classification_confidence": obs.classification_confidence,
         "classification_probabilities": safe_json_loads(obs.classification_probs_json, {}),
@@ -170,6 +172,9 @@ def process_and_store_frame(
     cache = get_model_cache()
     seg_model, seg_meta, seg_dev = cache.get("segmentation")
     cls_model, cls_meta, cls_dev = cache.get("classification")
+    seg_miou = float((seg_meta or {}).get("metrics", {}).get("val_miou", 0.5) or 0.0)
+    # Gate weak/under-trained checkpoints so they do not override calibrated sky physics
+    seg_nn_weight = 0.75 if seg_miou >= 0.35 else 0.25
 
     res = run_vision_pipeline(
         image_bgr=image_bgr,
@@ -182,6 +187,7 @@ def process_and_store_frame(
         dt_seconds=dt_seconds,
         seg_model=seg_model,
         seg_model_name=seg_meta.get("model_id", "radiometric-physics-v1") if seg_meta else "radiometric-physics-v1",
+        seg_nn_weight=seg_nn_weight,
         cls_model=cls_model,
         cls_model_name=cls_meta.get("model_id", "physical-heuristic-v1") if cls_meta else "physical-heuristic-v1",
         device=seg_dev,

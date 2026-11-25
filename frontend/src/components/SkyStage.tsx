@@ -50,7 +50,7 @@ export const SkyStage: React.FC<SkyStageProps> = ({
   onMaskSaved,
   busy,
 }) => {
-  const { t, tEnum, tCardinal } = useI18n();
+  const { t, tCardinal } = useI18n();
   const [mode, setMode] = useState<StageMode>("raw");
   const [showGrid, setShowGrid] = useState(false);
   const [showHorizon, setShowHorizon] = useState(false);

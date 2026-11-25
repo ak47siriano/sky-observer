@@ -596,3 +596,29 @@ def test_timelapse_hud_daily_digest_analytics_export_and_multicam_360(isolated_e
         assert r_radar.status_code == 200
         sec_projs = r_radar.json()["secondary_camera_projections"]
         assert len(sec_projs) == 1 and sec_projs[0]["id"] == "cam_north" and sec_projs[0]["has_mask"] is True
+
+
+def test_camera_geometry_auto_detect_endpoint(isolated_env):
+    import io
+    import numpy as np
+
+    # Upload a synthetic tilted skyline frame (horizon ~58% down -> small positive elevation)
+    w, h = 480, 270
+    frame = np.full((h, w, 3), (218, 198, 178), dtype=np.uint8)
+    yy, xx = np.mgrid[0:h, 0:w]
+    horizon_y = 0.58 * h - 0.07 * (xx - w / 2.0)
+    ground = yy >= horizon_y
+    frame[ground] = (52, 72, 58)
+    _, buf = cv2.imencode(".jpg", frame)
+
+    with TestClient(app) as client:
+        assert client.post("/api/camera/upload", files={"file": ("horiz.jpg", io.BytesIO(buf.tobytes()), "image/jpeg")}).status_code == 200
+        r_det = client.post("/api/camera/geometry/auto-detect", json={"apply": True, "recalculate_latest": True})
+        assert r_det.status_code == 200
+        body = r_det.json()
+        assert body["detected_horizon"] is True
+        assert body["applied"] is True
+        assert 0.5 <= body["orientation_elevation_deg"] <= 10.0
+        assert body["orientation_roll_deg"] > 1.5
+        assert "geometry" in body
+        assert body["geometry"]["orientation_elevation_deg"] == body["orientation_elevation_deg"]

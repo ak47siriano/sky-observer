@@ -9,22 +9,17 @@ import {
   Download,
   Droplets,
   Eye,
-  Gauge,
   Globe,
-  Layers,
   LocateFixed,
   Lock,
   MapPin,
   Maximize2,
   Minimize2,
-  Navigation,
   Pause,
   Play,
   RefreshCw,
   Search,
   Sliders,
-  Thermometer,
-  Wind,
 } from "lucide-react";
 import { CameraTiltCalibrator, type CameraGeometryValues } from "../components/CameraTiltCalibrator";
 import { RadarTelemetrySidebar } from "../components/radar/RadarTelemetrySidebar";
@@ -90,7 +85,7 @@ function pointInPolygon(lat: number, lon: number, poly: number[][]): boolean {
 }
 
 export const RadarMapPage: React.FC<Props> = ({ offlineMode, onToggleMode, onLocationSaved }) => {
-  const { locale, t, tEnum, tCardinal } = useI18n();
+  const { locale, t, tCardinal } = useI18n();
   const [state, setState] = useState<any>(null);
   const [latInput, setLatInput] = useState<string>("");
   const [lonInput, setLonInput] = useState<string>("");

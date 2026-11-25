@@ -20,6 +20,7 @@ export const ModelLabPage: React.FC = () => {
   const [hwInitialized, setHwInitialized] = useState(false);
 
   const [family, setFamily] = useState<"segmentation" | "classification" | "temporal" | "event">("segmentation");
+  const [arch, setArch] = useState<string>("CloudSegUNet-ConvNeXt-ASPP");
   const [datasetId, setDatasetId] = useState<number>(1);
   const [epochs, setEpochs] = useState(6);
   const [batchSize, setBatchSize] = useState(4);
@@ -141,6 +142,7 @@ export const ModelLabPage: React.FC = () => {
       const res = await api.startTraining({
         model_family: family,
         dataset_id: datasetId,
+        architecture: arch || undefined,
         epochs,
         batch_size: batchSize,
         learning_rate: lr,
@@ -474,7 +476,11 @@ export const ModelLabPage: React.FC = () => {
                     <div className="font-mono text-[#8E95A2] truncate">
                       {t("models.guideActiveNow")}{" "}
                       <span className="text-emerald-300 font-semibold">
-                        {activeModel ? activeModel.model_id : "—"}
+                        {activeModel
+                          ? activeModel.model_id
+                          : card.family === "segmentation"
+                          ? `radiometric-physics-v1 (${t("models.builtInTag")})`
+                          : t("models.builtInTag")}
                       </span>
                     </div>
                     <button
@@ -677,7 +683,17 @@ export const ModelLabPage: React.FC = () => {
               <span className="text-[#9AA1AD]">{t("models.family")}</span>
               <select
                 value={family}
-                onChange={(e) => setFamily(e.target.value as any)}
+                onChange={(e) => {
+                  const next = e.target.value as "segmentation" | "classification" | "temporal" | "event";
+                  setFamily(next);
+                  setArch(
+                    next === "segmentation"
+                      ? "CloudSegUNet-ConvNeXt-ASPP"
+                      : next === "classification"
+                      ? "CloudTypeClassifier-EfficientNetB0"
+                      : ""
+                  );
+                }}
                 className="obs-input w-full"
               >
                 <option value="segmentation">{t("models.fam.seg")}</option>
@@ -712,6 +728,31 @@ export const ModelLabPage: React.FC = () => {
                 {datasets.length === 0 && <option value={0}>{t("models.noDatasetOpt")}</option>}
               </select>
             </label>
+            {(family === "segmentation" || family === "classification") && (
+              <label className="block space-y-1">
+                <span className="text-[#9AA1AD]">Architecture</span>
+                <select
+                  value={arch}
+                  onChange={(e) => setArch(e.target.value)}
+                  className="obs-input w-full"
+                >
+                  {family === "segmentation" ? (
+                    <>
+                      <option value="CloudSegUNet-ConvNeXt-ASPP">ConvNeXt-Tiny + ASPP + scSE Attention (Pro)</option>
+                      <option value="CloudSegUNet-EfficientNetB0">EfficientNet-B0 UNet (Balanced)</option>
+                      <option value="CloudSegUNet-MobileNetV3">MobileNetV3-Small UNet (Fast)</option>
+                      <option value="CloudSegUNet-Mobile">Lightweight Depthwise UNet (Minimal)</option>
+                    </>
+                  ) : (
+                    <>
+                      <option value="CloudTypeClassifier-EfficientNetB0">EfficientNet-B0 + Gated Fusion (Pretrained)</option>
+                      <option value="CloudTypeClassifier-ConvNeXt">ConvNeXt-Tiny + Gated Fusion (Pro)</option>
+                      <option value="CloudTypeClassifier-Fusion">Compact CNN + Fusion (Legacy)</option>
+                    </>
+                  )}
+                </select>
+              </label>
+            )}
             <label className="block space-y-1">
               <span className="text-[#9AA1AD]">{t("hw.trainDeviceLabel")}</span>
               <select
@@ -900,7 +941,7 @@ export const ModelLabPage: React.FC = () => {
                 : "bg-[#0B0C0E] border-white/[0.07] text-[#8E95A2] hover:text-white"
             }`}
           >
-            {t("models.filterAll", { n: models.length })}
+            {t("models.filterAll", { n: models.length + 1 })}
           </button>
           {(["segmentation", "classification", "temporal", "event"] as const).map((fam) => {
             const count = models.filter((m) => m.model_family === fam).length;
@@ -915,7 +956,7 @@ export const ModelLabPage: React.FC = () => {
                     : "bg-[#0B0C0E] border-white/[0.07] text-[#8E95A2] hover:text-white"
                 }`}
               >
-                {tEnum(fam)} ({count})
+                {tEnum(fam)} ({fam === "segmentation" ? t("models.builtInFilterHint", { n: count }) : count})
               </button>
             );
           })}
@@ -934,6 +975,36 @@ export const ModelLabPage: React.FC = () => {
               </tr>
             </thead>
             <tbody className="divide-y divide-white/[0.05]">
+              {(registryFilter === "all" || registryFilter === "segmentation") && (() => {
+                const segNeuralActive = models.some((m) => m.model_family === "segmentation" && m.is_active);
+                return (
+                  <tr className="bg-sky-500/[0.03]">
+                    <td className="py-2 pr-3 font-mono text-white">
+                      radiometric-physics-v1{" "}
+                      <span className="ml-1 px-1.5 py-0.5 rounded bg-sky-500/15 border border-sky-400/30 text-sky-300 text-[9.5px]">
+                        {t("models.builtInTag")}
+                      </span>
+                    </td>
+                    <td className="py-2 pr-3">{tEnum("segmentation")}</td>
+                    <td className="py-2 pr-3 text-[#C5CBD5]">{t("models.builtInArch")}</td>
+                    <td className="py-2 pr-3 font-mono text-[11px] text-[#9AA1AD]">
+                      {t("models.builtInMetrics")}
+                    </td>
+                    <td className="py-2 pr-3">
+                      {!segNeuralActive ? (
+                        <span className="px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-300 text-[10px] font-mono">
+                          {t("models.builtInActive")}
+                        </span>
+                      ) : (
+                        <span className="text-[#646B78]">{t("models.standby")}</span>
+                      )}
+                    </td>
+                    <td className="py-2 pr-3 text-[11px] font-mono text-[#8E95A2]">
+                      {t("models.builtInActionHint")}
+                    </td>
+                  </tr>
+                );
+              })()}
               {filteredModels.map((m) => (
                 <tr key={m.model_id}>
                   <td className="py-2 pr-3 font-mono text-white">{m.model_id}</td>
@@ -976,7 +1047,7 @@ export const ModelLabPage: React.FC = () => {
                   </td>
                 </tr>
               ))}
-              {filteredModels.length === 0 && (
+              {filteredModels.length === 0 && registryFilter !== "all" && registryFilter !== "segmentation" && (
                 <tr>
                   <td colSpan={6} className="py-6 text-center text-[#646B78]">
                     {t("models.noModels")}

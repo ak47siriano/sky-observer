@@ -213,3 +213,31 @@ def test_hardware_profile_presets_and_device_selection(isolated_env):
         assert d_high["device"] == "cuda"
         assert d_high["inference_resolution"] == 512
         assert d_high["batch_size"] == 4
+
+
+def test_convnext_aspp_and_focal_dice_loss():
+    import torch
+
+    from app.ai.architectures import build_model_for_family
+    from app.ai.trainer import _FocalDiceSegLoss
+
+    seg_model, seg_name = build_model_for_family("segmentation", "CloudSegUNet-ConvNeXt-ASPP", pretrained=False)
+    assert seg_name == "CloudSegUNet-ConvNeXt-ASPP"
+    seg_model.train()
+    # Verify batch_size=1 in train mode works (ASPP global pool must not fail BatchNorm on 1x1x1)
+    single_logits = seg_model(torch.randn(1, 3, 256, 256))
+    assert single_logits.shape == (1, 5, 256, 256)
+    x = torch.randn(2, 3, 256, 256)
+    logits = seg_model(x)
+    assert logits.shape == (2, 5, 256, 256)
+
+    targets = torch.randint(0, 5, (2, 256, 256))
+    targets[:, :32, :] = 255  # ignore Not_Sky
+    loss_fn = _FocalDiceSegLoss(ignore_index=255, gamma=1.5)
+    loss = loss_fn(logits, targets)
+    assert torch.isfinite(loss) and float(loss.item()) > 0.0
+
+    cls_model, cls_name = build_model_for_family("classification", "CloudTypeClassifier-EfficientNetB0", pretrained=False)
+    assert cls_name == "CloudTypeClassifier-EfficientNetB0"
+    cls_logits = cls_model(torch.randn(2, 3, 224, 224), torch.randn(2, 18))
+    assert cls_logits.shape == (2, 11)

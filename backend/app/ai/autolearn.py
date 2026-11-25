@@ -20,7 +20,7 @@ from app.database import get_db_session
 from app.models_db import DatasetItem, DatasetRecord, EventAlert, ModelRegistry, Observation, TrainingSession
 from app.vision.classification import CLOUD_TYPE_CLASSES
 from app.vision.masking import build_valid_sky_mask_from_config, neutralize_excluded_pixels
-from app.vision.segmentation import _radiometric_probabilities
+from app.vision.segmentation import NOT_SKY_IGNORE_INDEX, _radiometric_probabilities
 
 AUTO_DATASET_NAME = "location_auto_reinforce"
 
@@ -157,7 +157,7 @@ def auto_label_local_observations(
 
         valid_small = cv2.resize(valid_mask, (save_w, save_h), interpolation=cv2.INTER_NEAREST)
         physics_small = np.argmax(
-            _radiometric_probabilities(cv2.resize(clean_bgr, (128, 128), interpolation=cv2.INTER_AREA)),
+            _radiometric_probabilities(cv2.resize(clean_bgr, (256, 256), interpolation=cv2.INTER_AREA)),
             axis=-1,
         ).astype(np.uint8)
         physics_resized = cv2.resize(physics_small, (save_w, save_h), interpolation=cv2.INTER_NEAREST)
@@ -167,20 +167,19 @@ def auto_label_local_observations(
             m_disk = cv2.imread(manual_item.mask_path, cv2.IMREAD_GRAYSCALE)
             if m_disk is not None:
                 m_res = cv2.resize(m_disk, (save_w, save_h), interpolation=cv2.INTER_NEAREST)
-                pseudo_mask = np.where(m_res > 5, np.where(m_res > 127, 2, 0), np.where(m_res == 5, physics_resized, m_res)).astype(np.uint8)
-            else:
-                pseudo_mask = physics_resized
-        elif obs.seg_mask_path and Path(obs.seg_mask_path).exists():
-            m_disk = cv2.imread(obs.seg_mask_path, cv2.IMREAD_GRAYSCALE)
-            if m_disk is not None:
-                m_res = cv2.resize(m_disk, (save_w, save_h), interpolation=cv2.INTER_NEAREST)
-                pseudo_mask = np.where(m_res == 5, physics_resized, np.clip(m_res, 0, 4)).astype(np.uint8)
+                pseudo_mask = np.where(
+                    m_res == NOT_SKY_IGNORE_INDEX,
+                    NOT_SKY_IGNORE_INDEX,
+                    np.where(m_res > 5, np.where(m_res > 127, 2, 0), np.where(m_res == 5, physics_resized, m_res)),
+                ).astype(np.uint8)
             else:
                 pseudo_mask = physics_resized
         else:
+            # Always use freshly calibrated radiometric physics for unlabeled camera frames
+            # rather than recycling stale predicted masks (prevents self-reinforcing model collapse).
             pseudo_mask = physics_resized
 
-        pseudo_mask[valid_small == 0] = 0
+        pseudo_mask[valid_small == 0] = NOT_SKY_IGNORE_INDEX
 
         dst_img = img_dir / f"loc_obs_{obs.id}.jpg"
         dst_msk = msk_dir / f"loc_obs_{obs.id}.png"
