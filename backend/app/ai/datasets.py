@@ -364,20 +364,23 @@ def import_local_dataset(
     Inspect and import a local directory containing sky images, optional segmentation masks,
     or class subdirectories (e.g. CCSN-style folders or SWIMSEG-style images/+masks/).
     """
-    allowed_base = os.path.realpath(str(config.data_dir))
-    datasets_base = os.path.realpath(str(config.datasets_dir))
+    allowed_base = os.path.normpath(os.path.realpath(str(config.data_dir)))
+    datasets_base = os.path.normpath(os.path.realpath(str(config.datasets_dir)))
     raw_path = str(source_dir).strip()
     if not raw_path:
         raise ValueError("Dataset directory path cannot be empty")
-    candidate = (
-        os.path.realpath(raw_path)
-        if os.path.isabs(raw_path)
-        else os.path.realpath(os.path.join(datasets_base, raw_path))
-    )
-    if candidate != allowed_base and not candidate.startswith(allowed_base + os.sep):
-        raise ValueError(f"Dataset directory must reside inside {allowed_base}")
+    if os.path.isabs(raw_path):
+        rel_sub = os.path.relpath(os.path.normpath(raw_path), allowed_base)
+        norm_candidate = os.path.normpath(os.path.join(allowed_base, rel_sub))
+    else:
+        norm_candidate = os.path.normpath(os.path.join(datasets_base, raw_path))
+    if not norm_candidate.startswith(allowed_base + os.sep):
+        raise ValueError("Dataset directory must reside inside local data directory")
+    real_candidate = os.path.realpath(norm_candidate)
+    if not real_candidate.startswith(allowed_base + os.sep):
+        raise ValueError("Dataset directory must reside inside local data directory")
 
-    safe_source_dir = Path(candidate)
+    safe_source_dir = Path(real_candidate)
     if not safe_source_dir.exists() or not safe_source_dir.is_dir():
         raise FileNotFoundError("Dataset directory does not exist")
 

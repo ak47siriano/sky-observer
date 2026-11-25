@@ -645,3 +645,11 @@ def test_dataset_import_blocks_path_traversal(isolated_env):
         )
         assert r_ok.status_code == 200
         assert r_ok.json()["item_count"] == 1
+
+        # Absolute path strictly inside configured data_dir also succeeds
+        r_abs = client.post(
+            "/api/dataset/import",
+            json={"name": "valid_cam_ds_abs", "directory_path": str(ok_dir)},
+        )
+        assert r_abs.status_code == 200
+        assert r_abs.json()["item_count"] == 1

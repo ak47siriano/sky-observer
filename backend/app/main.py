@@ -788,12 +788,31 @@ def api_dataset_bootstrap(db: Session = Depends(get_db)) -> dict[str, Any]:
 @app.post("/api/dataset/import")
 def api_dataset_import(req: DatasetImportRequest, db: Session = Depends(get_db)) -> dict[str, Any]:
     cfg = get_config_manager().get()
+    allowed_root = os.path.normpath(os.path.realpath(str(cfg.data_dir)))
+    datasets_root = os.path.normpath(os.path.realpath(str(cfg.datasets_dir)))
+    raw_dir = req.directory_path.strip()
+    if not raw_dir:
+        raise HTTPException(status_code=400, detail="Dataset directory path cannot be empty")
+    try:
+        if os.path.isabs(raw_dir):
+            rel_sub = os.path.relpath(os.path.normpath(raw_dir), allowed_root)
+            normalized_dir = os.path.normpath(os.path.join(allowed_root, rel_sub))
+        else:
+            normalized_dir = os.path.normpath(os.path.join(datasets_root, raw_dir))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="Invalid dataset directory path") from exc
+    if not normalized_dir.startswith(allowed_root + os.sep):
+        raise HTTPException(status_code=400, detail="Dataset directory must reside inside local data directory")
+    resolved_dir = os.path.realpath(normalized_dir)
+    if not resolved_dir.startswith(allowed_root + os.sep):
+        raise HTTPException(status_code=400, detail="Dataset directory must reside inside local data directory")
+
     try:
         rec = import_local_dataset(
             db=db,
             config=cfg,
             name=req.name,
-            source_dir=Path(req.directory_path),
+            source_dir=Path(resolved_dir),
             license_name=req.license_name,
             description=req.description,
         )
