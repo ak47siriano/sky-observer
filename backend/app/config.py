@@ -162,6 +162,8 @@ class AutoTrainConfig(BaseModel):
         default_factory=lambda: ["segmentation", "classification", "temporal"]
     )
     warm_start: bool = True
+    fixed_holdout_fraction: float = Field(default=0.20, ge=0.05, le=0.50)
+    promotion_tolerance: float = Field(default=0.01, ge=0.0, le=0.20)
 
 
 class AIConfig(BaseModel):
@@ -175,7 +177,19 @@ class AIConfig(BaseModel):
     cls_batch_size: int = Field(default=32, ge=1, le=128)
     dataloader_num_workers: int = Field(default=2, ge=0, le=8)
     gradient_accumulation_steps: int = Field(default=1, ge=1, le=16)
-    seg_backbone: Literal["convnext_aspp", "mobilenet_v3_small", "efficientnet_b0", "lightweight"] = "convnext_aspp"
+    seg_backend: Literal[
+        "auto", "radiometric_physics", "deeplabv3_daytime", "dinov3_linear_probe"
+    ] = "auto"
+    seg_backbone: Literal[
+        "convnext_aspp",
+        "mobilenet_v3_small",
+        "efficientnet_b0",
+        "lightweight",
+        "deeplabv3_mobilenet_v3",
+        "dinov3_linear_probe",
+    ] = "convnext_aspp"
+    dinov3_backbone_id: str = "vit_small_patch14_dinov2.lvd142m"
+    dinov3_weights_path: str = ""
     cls_backbone: Literal["efficientnet_b0", "convnext_tiny", "compact"] = "efficientnet_b0"
     pretrained_backbone: bool = True
     group_ambiguous_wmo: bool = False

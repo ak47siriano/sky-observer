@@ -303,6 +303,174 @@ class CloudSegUNet(nn.Module):
         return logits
 
 
+class DeepLabV3CloudSeg(nn.Module):
+    """
+    Lightweight daytime-ready DeepLabV3-MobileNetV3-Large segmentation backend
+    built directly on official torchvision (BSD-3-Clause).
+    Fine-tunable on SWIMSEG/SWINySEG or user sky frames; runs cleanly offline when weights are absent.
+    """
+
+    def __init__(self, num_classes: int = 5, pretrained: bool = False) -> None:
+        super().__init__()
+        self.num_classes = num_classes
+        self.backbone_name = "deeplabv3_mobilenet_v3"
+        self.net: nn.Module | None = None
+        if tv_models is not None and hasattr(tv_models, "segmentation"):
+            weights_backbone = None
+            if pretrained:
+                try:
+                    weights_backbone = tv_models.MobileNet_V3_Large_Weights.DEFAULT
+                except Exception:
+                    weights_backbone = None
+            try:
+                self.net = tv_models.segmentation.deeplabv3_mobilenet_v3_large(
+                    weights=None,
+                    weights_backbone=weights_backbone,
+                    num_classes=num_classes,
+                    aux_loss=False,
+                )
+            except Exception:
+                self.net = tv_models.segmentation.deeplabv3_mobilenet_v3_large(
+                    weights=None,
+                    weights_backbone=None,
+                    num_classes=num_classes,
+                    aux_loss=False,
+                )
+        if self.net is None:
+            self.net = CloudSegUNet(in_channels=3, num_classes=num_classes, backbone="lightweight", pretrained=False)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        out = self.net(x)
+        if isinstance(out, dict):
+            return out["out"]
+        return out
+
+
+class _LocalPatchFeatureFallback(nn.Module):
+    """
+    Deterministic multi-scale patch feature extractor used when optional DINOv3/DINOv2
+    weights are not installed locally (keeps offline mode and CPU tests 100% functional).
+    """
+
+    def __init__(self, embed_dim: int = 128, patch_size: int = 16) -> None:
+        super().__init__()
+        self.embed_dim = embed_dim
+        self.patch_size = patch_size
+        self.stem = nn.Sequential(
+            nn.Conv2d(3, 48, kernel_size=7, stride=4, padding=3, bias=False),
+            nn.GroupNorm(8, 48),
+            nn.GELU(),
+            nn.Conv2d(48, 96, kernel_size=3, stride=2, padding=1, bias=False),
+            nn.GroupNorm(8, 96),
+            nn.GELU(),
+            nn.Conv2d(96, embed_dim, kernel_size=3, stride=2, padding=1, bias=False),
+            nn.GroupNorm(8, embed_dim),
+            nn.GELU(),
+        )
+        for p in self.stem.parameters():
+            p.requires_grad = False
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return self.stem(x)
+
+
+class DINOv3LinearProbeSeg(nn.Module):
+    """
+    LenghuSky-8-inspired (Apache-2.0 methodology) frozen Vision Transformer patch encoder +
+    trainable 1x1 linear probe for day/night sky segmentation from 50-100 labeled frames.
+
+    Note: Optional DINOv3 backbone weights carry their own separate DINOv3 License and are
+    loaded only if explicitly provided/cached locally; otherwise falls back cleanly to a
+    frozen local patch encoder without any network downloads.
+    """
+
+    def __init__(
+        self,
+        num_classes: int = 5,
+        backbone_id: str = "vit_small_patch14_dinov2.lvd142m",
+        weights_path: str = "",
+        use_timm_backbone: bool = False,
+        fallback_embed_dim: int = 128,
+    ) -> None:
+        super().__init__()
+        self.num_classes = num_classes
+        self.backbone_id = backbone_id
+        self.backbone_name = "dinov3_linear_probe"
+        self.using_timm = False
+        self.patch_size = 16
+        self.backbone: nn.Module
+
+        loaded_timm = False
+        if use_timm_backbone or weights_path:
+            try:
+                import timm  # type: ignore[import-not-found]
+
+                kwargs: dict[str, object] = {"pretrained": False, "num_classes": 0, "dynamic_img_size": True}
+                if weights_path:
+                    kwargs["checkpoint_path"] = weights_path
+                elif use_timm_backbone:
+                    kwargs["pretrained"] = True
+                vit = timm.create_model(backbone_id, **kwargs)
+                for p in vit.parameters():
+                    p.requires_grad = False
+                vit.eval()
+                self.backbone = vit
+                embed_dim = int(getattr(vit, "num_features", 384))
+                ps = getattr(getattr(vit, "patch_embed", None), "patch_size", 14)
+                self.patch_size = int(ps[0] if isinstance(ps, (tuple, list)) else ps)
+                self.using_timm = True
+                loaded_timm = True
+            except Exception:
+                loaded_timm = False
+
+        if not loaded_timm:
+            embed_dim = int(fallback_embed_dim)
+            self.backbone = _LocalPatchFeatureFallback(embed_dim=embed_dim, patch_size=16)
+            self.patch_size = 16
+
+        self.embed_dim = embed_dim
+        # Lightweight trainable linear probe head (only these parameters are optimized!)
+        self.probe_norm = nn.GroupNorm(8, embed_dim)
+        self.head = nn.Conv2d(embed_dim, num_classes, kernel_size=1)
+
+    def train(self, mode: bool = True) -> DINOv3LinearProbeSeg:
+        super().train(mode)
+        # Keep frozen backbone strictly in eval mode during linear probing
+        self.backbone.eval()
+        return self
+
+    def extract_patch_grid(self, x: torch.Tensor) -> torch.Tensor:
+        with torch.no_grad():
+            if not self.using_timm:
+                return self.backbone(x)
+            h, w = x.shape[-2:]
+            ps = self.patch_size
+            nh = max(ps, (h // ps) * ps)
+            nw = max(ps, (w // ps) * ps)
+            x_in = F.interpolate(x, size=(nh, nw), mode="bilinear", align_corners=False) if (nh != h or nw != w) else x
+            # ImageNet normalization expected by DINOv2/DINOv3 ViTs
+            mean = x_in.new_tensor([0.485, 0.456, 0.406]).view(1, 3, 1, 1)
+            std = x_in.new_tensor([0.229, 0.224, 0.225]).view(1, 3, 1, 1)
+            x_norm = (x_in - mean) / std
+            feats = self.backbone.forward_features(x_norm)
+            if isinstance(feats, dict):
+                feats = feats.get("x_norm_patchtokens", next(iter(feats.values())))
+            if feats.ndim == 3:
+                gh, gw = nh // ps, nw // ps
+                n_patches = gh * gw
+                patch_tokens = feats[:, -n_patches:, :]
+                return patch_tokens.transpose(1, 2).reshape(x.shape[0], self.embed_dim, gh, gw)
+            return feats
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        orig_hw = x.shape[-2:]
+        grid = self.extract_patch_grid(x)
+        logits = self.head(self.probe_norm(grid))
+        if logits.shape[-2:] != orig_hw:
+            logits = F.interpolate(logits, size=orig_hw, mode="bilinear", align_corners=False)
+        return logits
+
+
 class CloudTypeClassifier(nn.Module):
     """
     Stage 2: Pretrained Visual Backbone + Gated Multimodal Tabular Fusion Classifier for WMO cloud genera.
@@ -397,7 +565,12 @@ class CloudTypeClassifier(nn.Module):
 
     def forward(self, img: torch.Tensor, features: torch.Tensor) -> torch.Tensor:
         if features.shape[1] < self.tabular_dim:
-            pad = torch.zeros(features.shape[0], self.tabular_dim - features.shape[1], device=features.device, dtype=features.dtype)
+            pad = torch.zeros(
+                features.shape[0],
+                self.tabular_dim - features.shape[1],
+                device=features.device,
+                dtype=features.dtype,
+            )
             features = torch.cat([features, pad], dim=1)
         elif features.shape[1] > self.tabular_dim:
             features = features[:, : self.tabular_dim]
@@ -487,7 +660,11 @@ def build_model_for_family(
     if family == "segmentation":
         arch_l = (architecture or "").lower()
         bb = seg_backbone
-        if "convnext" in arch_l or "aspp" in arch_l:
+        if "dinov3" in arch_l or "dinov2" in arch_l or "linear_probe" in arch_l or "linearprobe" in arch_l:
+            bb = "dinov3_linear_probe"
+        elif "deeplab" in arch_l:
+            bb = "deeplabv3_mobilenet_v3"
+        elif "convnext" in arch_l or "aspp" in arch_l:
             bb = "convnext_aspp"
         elif "efficientnet" in arch_l:
             bb = "efficientnet_b0"
@@ -496,6 +673,12 @@ def build_model_for_family(
         elif architecture == "CloudSegUNet-Mobile":
             bb = "lightweight"
         nc = num_classes or 5
+        if bb == "deeplabv3_mobilenet_v3":
+            dl_model = DeepLabV3CloudSeg(num_classes=nc, pretrained=pretrained)
+            return dl_model, architecture or "DeepLabV3-MobileNetV3"
+        if bb == "dinov3_linear_probe":
+            dino_model = DINOv3LinearProbeSeg(num_classes=nc, use_timm_backbone=False)
+            return dino_model, architecture or "DINOv3-LinearProbe"
         model = CloudSegUNet(in_channels=3, num_classes=nc, base_ch=24, backbone=bb, pretrained=pretrained)
         if architecture:
             arch_label = architecture
@@ -528,7 +711,8 @@ def build_model_for_family(
         )
         return cls_model, architecture or default_lbl
     if family == "temporal":
-        return TemporalSkyConvGRU(input_dim=20, hidden_dim=64, num_horizons=num_horizons), architecture or "TemporalSkyConvGRU"
+        tmp_model = TemporalSkyConvGRU(input_dim=20, hidden_dim=64, num_horizons=num_horizons)
+        return tmp_model, architecture or "TemporalSkyConvGRU"
     if family == "event":
         return SkyEventClassifier(input_dim=20, hidden_dim=48, num_classes=8), architecture or "SkyEventClassifier-GRU"
     raise ValueError(f"Unknown model family: {family}")

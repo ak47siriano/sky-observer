@@ -1,43 +1,71 @@
 # Sky Observer — Model Card
 
-All models run locally in PyTorch (`torch 2.15.0`) and are sized for **8 GB NVIDIA VRAM** and **16 GB RAM**, with automatic CPU fallback when CUDA is unavailable.
+All models run 100% locally in PyTorch (`torch >= 2.2`) with automatic hardware scaling from **Low-End CPU-only PCs (4 GB RAM, 256×256)** up to **NVIDIA CUDA / AMD ROCm / DirectML / Apple MPS GPUs**.
 
 ---
 
-## Model 1 — Cloud Segmentation (`CloudSegUNet-Mobile`)
-- **Task**: Pixel-level 6-class sky segmentation (`clear_sky`, `thin_cloud`, `dense_cloud`, `dark_cloud`, `haze_fog`, `uncertain`).
-- **Architecture**: Depthwise-separable Mobile-UNet encoder-decoder (~185K parameters) ensembled at inference with a calibrated radiometric physical prior `(B-R)/(B+R)` + Lab luminance and Shannon-entropy uncertainty masking.
-- **Input**: RGB frame resized to configurable inference resolution (`384×384`, `512×512`, or `640×640`).
-- **Baseline Checkpoint (`segmentation-v1.0.0-c1bd45`)**:
-  - Dataset: `skyobserver_local_baseline` (144 frames across 8 sky scenarios, group-split without sequence leakage)
-  - Device: CPU fallback (4 epochs)
-  - Measured validation metrics: `val_miou = 0.6304`, `val_pixel_acc = 0.8756`, `val_loss = 0.5392`
+## Stage 1 — Cloud Segmentation (Pluggable Backends)
 
-## Model 2 — Cloud Type Classifier (`CloudTypeClassifier-Fusion`)
-- **Task**: Probability distribution over 11 visual cloud classes (`clear_sky`, `cirrus`, `cirrostratus`, `cumulus`, `stratocumulus`, `stratus`, `altocumulus`, `altostratus`, `cumulonimbus_like`, `mixed_clouds`, `unknown`). Low-confidence predictions (`< 0.35`) default to `unknown`.
-- **Architecture**: Compact depthwise-separable CNN backbone (`224×224` RGB) fused with a 12-dimensional radiometric/coverage/texture descriptor vector.
-- **Baseline Checkpoint (`classification-v1.0.0-137e04`)**:
-  - Dataset: `skyobserver_local_baseline` (class-balanced cross-entropy loss, 6 epochs)
-  - Measured validation metrics: `val_accuracy = 0.8750`, `val_macro_f1 = 0.7179`, `val_precision = 0.7714`, `val_recall = 0.7000`
+**Target classes (5 sky classes + static `Not_Sky = 255` ignore index):**
+`0: clear_sky`, `1: thin_cloud`, `2: dense_cloud`, `3: dark_cloud`, `4: sun_glare`.
 
-## Model 3 — Temporal Sky Predictor (`TemporalSkyConvGRU`) [Experimental]
-- **Task**: Predicts future cloud coverage (`+5m`, `+15m`, `+30m`, `+60m`) and probabilities for clearing, increasing cloudiness, overcast, darkening, and experimental precipitation visual cues from sequences of 20-dimensional frame features.
-- **Architecture**: 1D temporal convolution + 2-layer GRU (`hidden_dim=64`).
-- **Baseline Checkpoint (`temporal-v1.0.0-da88f3`)**:
-  - Dataset: `skyobserver_local_baseline` (6-frame sequences, 12 epochs)
-  - Measured validation metrics: `val_mae_pct = 21.08%`, `val_loss = 0.3857`
-  - **Status**: **Experimental.** Should be fine-tuned and chronologically verified on multi-day/multi-week real Android camera sequences before relying on neural horizon predictions alone.
+| Backend | Architecture / License | GPU Required | Intended Use |
+| :--- | :--- | :---: | :--- |
+| `radiometric-physics-v1` *(default)* | Calibrated CIE-Lab + `(B-R)/(B+R)` + AWB compensation + sun glare guard (MIT) | No (CPU-only) | Zero-GPU baseline for Low-End PCs & out-of-the-box daytime skies |
+| `DeepLabV3-MobileNetV3` | Official `torchvision.models.segmentation.deeplabv3_mobilenet_v3_large` (**BSD-3-Clause**) | Optional | Fast daytime neural segmentation ready to fine-tune on SWIMSEG/SWINySEG |
+| `DINOv3-LinearProbe` | Frozen ViT patch encoder + trainable `1×1 Conv` linear probe (inspired by **LenghuSky-8**, Apache-2.0 methodology; optional DINOv3 weights governed separately by the **DINOv3 License**) | Recommended for ViT backbone; CPU-safe with local fallback | Day + night sky adaptation from **50–100 user-labeled frames** (`scripts/train_dinov3_probe.py`) |
+| `CloudSegUNet-ConvNeXt-ASPP` | ConvNeXt-Tiny + ASPP + scSE attention UNet (also supports MobileNetV3-Small, EfficientNet-B0, lightweight depthwise-separable UNet) | Recommended | Multi-scale daytime cloud segmentation fine-tuning |
 
-## Model 4 — Event Classifier (`SkyEventClassifier-GRU`)
-- **Task**: Sequence classification across 8 operational and sky events (`normal`, `rapid_cloud_development`, `sky_clearing`, `cloud_cover_increasing`, `dark_cloud_development`, `storm_like_structure`, `camera_obstruction`, `unusual_change`).
-- **Architecture**: Sequence GRU (`hidden_dim=48`) + MLP head.
-- **Baseline Checkpoint (`event-v1.0.0-e46ee3`)**:
-  - Dataset: `skyobserver_local_baseline` (12 epochs)
-  - Measured validation metrics: `val_accuracy = 0.7500`, `val_macro_f1 = 0.4286`
+- **Literature references** (architecture design inspiration; no third-party GPL/unlicensed source code copied):
+  - **LenghuSky-8** (Rui et al., CVPR Findings 2025, Apache-2.0) — DINOv3 linear-probe day/night segmentation + optical-flow advection benchmark
+  - **SCANet**, **UCloudNet**, **DDUNet**, **ACLNet** — multi-scale attention and lightweight sky/cloud segmentation paradigms
 
 ---
 
-## Limitations & Responsible Meteorological Use
-1. Baseline v1.0.0 checkpoints were trained on `skyobserver_local_baseline` (locally generated multi-scenario sky sequences) to validate the end-to-end training/inference pipeline offline. Fine-tune on public datasets (SWIMSEG, SWINySEG, WSISEG, CCSN) and your own Android camera annotations in **Model Lab** for field accuracy.
-2. Visual cloud genus classification is an image-based visual approximation, not an authoritative meteorological observation.
-3. No model measures temperature, pressure, humidity, or true cloud-base altitude; precipitation/storm signals are experimental visual indicators only.
+## Stage 2 — Cloud Type Classifier (`CloudTypeClassifier`)
+
+- **Task**: Probability distribution over **11 Sky Classes** (10 WMO cloud genera + non-WMO sky states `clear_sky`, `mixed_clouds`, `unknown`; optional grouped WMO mode). Low-confidence predictions (`< 0.35`) return `unknown` rather than forcing an inaccurate genus.
+- **Architecture**: Pretrained `EfficientNet-B0` (or `ConvNeXt-Tiny` / compact CNN) fused via a gated multimodal layer with an 18-dimensional radiometric, coverage, texture, and solar-elevation feature vector.
+
+---
+
+## Stage 3 — Short-Term Nowcasting (`Persistence` / `Optical-Flow Advection` / `TemporalSkyConvGRU`)
+
+- **Baselines (always computed alongside predictions)**:
+  - **Persistence**: `cover(t + h) = cover(t)`
+  - **Optical-Flow Mask Advection**: semi-Lagrangian `cv2.remap` advection of the Stage-1 cloud mask + lightweight perturbed-flow ensemble (`cover_p10`, `cover_p50`, `cover_p90`, `fov_exit_fraction`, pixel-level probability map at `GET /api/forecast/advected-mask.png`)
+- **Neural Component (`TemporalSkyConvGRU`)** *(Experimental)*: 1D temporal convolution + 2-layer GRU over 20-dimensional visual/motion feature sequences for camera-only horizons (`+5m`, `+15m`, `+20m`; extended `+30m`/`+60m` only when optional online NWP is enabled).
+- **Honest Verification**: All verified forecasts record **MAE, RMSE, Brier score, Persistence MAE, Optical-Flow MAE, and Forecast Skill Score** (`1 - MAE_model / MAE_persistence`). Horizons that do not beat persistence or suffer `>= 70%` FOV exit are flagged `low_reliability: true`.
+
+---
+
+## Stage 4 — Event & Anomaly Detection (`SkyEventEngine` + `SkyEventClassifier-GRU`)
+
+- Hybrid deterministic thresholds + optional sequence GRU over 8 operational/sky event classes (`normal`, `rapid_cloud_development`, `sky_clearing`, `cloud_cover_increasing`, `dark_cloud_development`, `storm_like_structure`, `camera_obstruction`, `unusual_change`).
+
+---
+
+## Anti-Drift Auto-Train Safeguard
+
+When optional Location Auto-Train runs:
+1. A permanent **fixed holdout manifest** (`data/datasets/location_auto_reinforce/fixed_holdout.json`) locks human-labeled and stratified site frames strictly in `val` across all future cycles (preventing train/val leakage).
+2. New checkpoints are trained in standby and **promoted only if their validation metric meets or exceeds the active model** (within `promotion_tolerance`, default `0.01`). Regressing checkpoints stay in standby with the rejection reason logged in `model_registry.notes`.
+
+---
+
+## Reproducible Benchmarks
+
+Run the unified evaluator locally to measure metrics on your machine and datasets (no hard-coded or invented claims):
+
+```bash
+PYTHONPATH=backend python scripts/evaluate.py
+PYTHONPATH=backend python scripts/evaluate_nowcast.py --from-db
+```
+
+---
+
+## Limitations & Responsible Use
+
+1. Visual cloud classification is a single-camera visual approximation, not an authoritative meteorological observation.
+2. Narrow-FOV single cameras cannot observe clouds before they enter the field of view; `+30m/+60m` skill degrades sharply without external NWP/satellite inputs.
+3. No camera model directly measures pressure, humidity, or true cloud-base altitude; precipitation/storm cues are experimental visual indicators only.

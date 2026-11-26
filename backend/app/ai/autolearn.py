@@ -14,15 +14,122 @@ import numpy as np
 from sqlalchemy.orm import Session
 
 from app.ai.datasets import _assign_group_splits, bootstrap_local_sky_dataset
+from app.ai.registry import activate_model_by_id
 from app.ai.trainer import get_training_manager
 from app.config import AppConfig, get_config_manager
 from app.database import get_db_session
-from app.models_db import DatasetItem, DatasetRecord, EventAlert, ModelRegistry, Observation, TrainingSession
+from app.models_db import (
+    DatasetItem,
+    DatasetRecord,
+    EventAlert,
+    ModelRegistry,
+    Observation,
+    TrainingSession,
+    safe_json_loads,
+)
 from app.vision.classification import CLOUD_TYPE_CLASSES
 from app.vision.masking import build_valid_sky_mask_from_config, neutralize_excluded_pixels
 from app.vision.segmentation import NOT_SKY_IGNORE_INDEX, _radiometric_probabilities
 
 AUTO_DATASET_NAME = "location_auto_reinforce"
+FIXED_HOLDOUT_FILENAME = "fixed_holdout.json"
+
+
+def _load_or_update_fixed_holdout(
+    root: Path,
+    items_meta: list[dict[str, Any]],
+    holdout_fraction: float = 0.20,
+) -> tuple[list[dict[str, Any]], list[str]]:
+    """
+    Maintain a deterministic, append-only fixed holdout manifest (`fixed_holdout.json`)
+    so validation samples NEVER leak into training across Auto-Train cycles (anti-drift guard).
+    Prioritizes human-labeled samples (`user_labeled=True`) when seeding the holdout.
+    """
+    manifest_path = root / FIXED_HOLDOUT_FILENAME
+    locked_keys: set[str] = set()
+    if manifest_path.exists():
+        try:
+            raw = json.loads(manifest_path.read_text(encoding="utf-8"))
+            if isinstance(raw, dict) and isinstance(raw.get("locked_keys"), list):
+                locked_keys = {str(k) for k in raw["locked_keys"]}
+        except Exception:
+            locked_keys = set()
+
+    def _item_key(it: dict[str, Any]) -> str:
+        if it.get("observation_id") is not None:
+            return f"obs:{it['observation_id']}"
+        return f"path:{Path(str(it.get('image_path', ''))).name}"
+
+    # Apply standard group splits first, then lock deterministic holdout keys to 'val'
+    items_meta = _assign_group_splits(items_meta)
+    local_items = [it for it in items_meta if not str(it.get("group_key", "")).startswith("replay_")]
+    target_holdout = max(1, int(round(len(local_items) * float(np.clip(holdout_fraction, 0.05, 0.50)))))
+
+    present_locked = [it for it in local_items if _item_key(it) in locked_keys]
+    if len(present_locked) < target_holdout and len(local_items) >= 2:
+        # Prefer user-labeled frames, then evenly spaced local frames across time
+        candidates = [it for it in local_items if _item_key(it) not in locked_keys]
+        user_cands = [it for it in candidates if it.get("user_labeled")]
+        other_cands = [it for it in candidates if not it.get("user_labeled")]
+        needed = target_holdout - len(present_locked)
+        picked: list[dict[str, Any]] = []
+        for it in user_cands[: max(0, min(needed, len(user_cands)))]:
+            picked.append(it)
+        rem = needed - len(picked)
+        if rem > 0 and other_cands:
+            idxs = np.linspace(0, len(other_cands) - 1, num=min(rem, len(other_cands)), dtype=int)
+            for idx in sorted(set(idxs.tolist())):
+                picked.append(other_cands[int(idx)])
+        for it in picked:
+            locked_keys.add(_item_key(it))
+
+    # Enforce: locked holdout items are ALWAYS val; ensure at least 1 train item remains
+    train_count = 0
+    for it in items_meta:
+        k = _item_key(it)
+        if k in locked_keys:
+            it["split"] = "val"
+        elif it.get("split") == "train":
+            train_count += 1
+    if train_count == 0 and items_meta:
+        items_meta[0]["split"] = "train"
+
+    try:
+        manifest_path.parent.mkdir(parents=True, exist_ok=True)
+        manifest_path.write_text(
+            json.dumps(
+                {
+                    "updated_at": datetime.now(UTC).isoformat(),
+                    "locked_keys": sorted(locked_keys),
+                },
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+    except Exception:
+        pass
+    return items_meta, sorted(locked_keys)
+
+
+def _extract_primary_metric(family: str, metrics: dict[str, Any]) -> float | None:
+    if not isinstance(metrics, dict) or not metrics:
+        return None
+    if family == "segmentation":
+        val = metrics.get("val_miou")
+        return float(val) if val is not None else None
+    if family in {"classification", "event"}:
+        acc = metrics.get("val_accuracy")
+        f1 = metrics.get("val_macro_f1")
+        if acc is not None and f1 is not None:
+            return 0.5 * float(acc) + 0.5 * float(f1)
+        if acc is not None:
+            return float(acc)
+        return None
+    if family == "temporal":
+        mae = metrics.get("val_mae_pct")
+        if mae is not None:
+            return 1.0 / (1.0 + max(0.0, float(mae)))
+    return None
 
 _EVENT_TYPE_TO_LABEL = {
     "storm_like_development": "storm_like_structure",
@@ -307,7 +414,11 @@ def auto_label_local_observations(
                 })
                 replay_count += 1
 
-    items_meta = _assign_group_splits(items_meta)
+    items_meta, locked_keys = _load_or_update_fixed_holdout(
+        root=root,
+        items_meta=items_meta,
+        holdout_fraction=float(getattr(at_cfg, "fixed_holdout_fraction", 0.20)),
+    )
 
     existing = db.query(DatasetRecord).filter(DatasetRecord.name == AUTO_DATASET_NAME).first()
     if existing:
@@ -322,6 +433,7 @@ def auto_label_local_observations(
             "user_labeled_items": user_labeled_count,
             "confirmed_event_items": confirmed_events_used,
             "replay_items": replay_count,
+            "fixed_holdout_count": len(locked_keys),
         })
     else:
         rec = DatasetRecord(
@@ -340,6 +452,7 @@ def auto_label_local_observations(
                 "user_labeled_items": user_labeled_count,
                 "confirmed_event_items": confirmed_events_used,
                 "replay_items": replay_count,
+                "fixed_holdout_count": len(locked_keys),
             }),
         )
         db.add(rec)
@@ -373,6 +486,7 @@ def auto_label_local_observations(
         "user_labeled_items": user_labeled_count,
         "confirmed_event_items": confirmed_events_used,
         "replay_items": replay_count,
+        "fixed_holdout_count": len(locked_keys),
         "latest_observation_id": max_obs_id,
     }
 
@@ -523,33 +637,78 @@ class AutoLearnManager:
                     self._current_family = fam
 
                 warm_path: str | None = None
-                if cfg.ai.auto_train.warm_start:
-                    with get_db_session() as db:
-                        active_rec = (
-                            db.query(ModelRegistry)
-                            .filter(ModelRegistry.model_family == fam, ModelRegistry.is_active.is_(True))
-                            .first()
+                prev_active_metric: float | None = None
+                with get_db_session() as db:
+                    active_rec = (
+                        db.query(ModelRegistry)
+                        .filter(ModelRegistry.model_family == fam, ModelRegistry.is_active.is_(True))
+                        .first()
+                    )
+                    if active_rec:
+                        prev_active_metric = _extract_primary_metric(
+                            fam, safe_json_loads(active_rec.metrics_json, {})
                         )
-                        if active_rec and Path(active_rec.weights_path).exists():
+                        if cfg.ai.auto_train.warm_start and Path(active_rec.weights_path).exists():
                             warm_path = active_rec.weights_path
 
+                # Train candidate into standby first, then apply fixed-holdout anti-drift promotion gate
                 res = tm.start_training(
                     model_family=fam,
                     dataset_id=ds_id,
                     epochs=run_epochs,
                     learning_rate=cfg.ai.auto_train.learning_rate,
-                    auto_activate=True,
+                    auto_activate=False,
                     async_run=False,
                     warm_start_weights=warm_path,
                 )
+                promoted = False
+                gate_reason = "no_checkpoint"
                 with get_db_session() as db:
                     sess = db.query(TrainingSession).filter(TrainingSession.id == res["session_id"]).first()
+                    cand = (
+                        db.query(ModelRegistry)
+                        .filter(ModelRegistry.training_session_id == res["session_id"])
+                        .order_by(ModelRegistry.id.desc())
+                        .first()
+                    )
+                    if cand is not None:
+                        cand_metric = _extract_primary_metric(
+                            fam, safe_json_loads(cand.metrics_json, {})
+                        )
+                        if cand_metric is None and sess is not None:
+                            cand_metric = float(sess.best_val_metric or 0.0)
+                        tol = float(getattr(cfg.ai.auto_train, "promotion_tolerance", 0.01))
+                        if prev_active_metric is None:
+                            activate_model_by_id(db, cand.model_id)
+                            cand.notes = f"{cand.notes} | Promoted: initial active model"
+                            db.commit()
+                            promoted = True
+                            gate_reason = "promoted_initial"
+                        elif cand_metric is not None and cand_metric >= (prev_active_metric - tol):
+                            activate_model_by_id(db, cand.model_id)
+                            cand.notes = (
+                                f"{cand.notes} | Promoted by anti-drift gate "
+                                f"({cand_metric:.4f} >= {prev_active_metric:.4f} - {tol:.3f})"
+                            )
+                            db.commit()
+                            promoted = True
+                            gate_reason = "promoted_metric_ok"
+                        else:
+                            cand.notes = (
+                                f"{cand.notes} | Kept standby by anti-drift gate "
+                                f"(candidate={cand_metric} < active={prev_active_metric:.4f} - {tol:.3f})"
+                            )
+                            db.commit()
+                            promoted = False
+                            gate_reason = "rejected_anti_drift_regression"
                     jobs_out.append({
                         "job_id": res["job_id"],
                         "model_family": fam,
                         "device": res["device"],
                         "status": sess.status if sess else "unknown",
                         "best_val_metric": sess.best_val_metric if sess else 0.0,
+                        "promoted": promoted,
+                        "gate_reason": gate_reason,
                         "error_message": sess.error_message if sess else "",
                     })
                 with self._lock:

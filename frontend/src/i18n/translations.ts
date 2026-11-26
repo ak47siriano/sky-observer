@@ -403,6 +403,8 @@ export const TRANSLATIONS: Record<Locale, Record<string, string>> = {
     "exclude.erase": "Erase",
     "exclude.clear": "Clear Mask",
     "exclude.save": "Save Exclusion Mask",
+    "exclude.autoPropose": "Auto-Propose Obstacles",
+    "exclude.proposedPct": "Proposed ({pct}% obstacles) — edit and click Save",
     "exclude.savedPct": "Saved ({pct}% excluded)",
     "exclude.cleared": "Exclusion mask cleared",
     "exclude.hint":
@@ -1076,6 +1078,8 @@ export const TRANSLATIONS: Record<Locale, Record<string, string>> = {
     "exclude.erase": "Gomma",
     "exclude.clear": "Pulisci Maschera",
     "exclude.save": "Salva Maschera Esclusa",
+    "exclude.autoPropose": "Auto-Proponi Ostacoli",
+    "exclude.proposedPct": "Proposta ({pct}% ostacoli) — rifinisci e clicca Salva",
     "exclude.savedPct": "Salvata ({pct}% escluso)",
     "exclude.cleared": "Maschera di esclusione rimossa",
     "exclude.hint":

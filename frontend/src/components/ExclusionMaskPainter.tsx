@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from "react";
-import { Brush, Eraser, Save, Square, Trash2 } from "lucide-react";
+import { Brush, Eraser, Save, Sparkles, Square, Trash2 } from "lucide-react";
 import { useI18n } from "../i18n/I18nContext";
 import { api } from "../services/api";
 
@@ -19,6 +19,7 @@ export const ExclusionMaskPainter: React.FC<Props> = ({ imageUrl, onSaved }) => 
   const [brushSize, setBrushSize] = useState(24);
   const [statusMsg, setStatusMsg] = useState("");
   const [saving, setSaving] = useState(false);
+  const [proposing, setProposing] = useState(false);
 
   // Load previously saved painted exclusion mask onto canvas
   useEffect(() => {
@@ -122,6 +123,28 @@ export const ExclusionMaskPainter: React.FC<Props> = ({ imageUrl, onSaved }) => 
     setTimeout(() => setStatusMsg(""), 3000);
   };
 
+  const handlePropose = async () => {
+    const c = canvasRef.current;
+    const ctx = c?.getContext("2d");
+    if (!c || !ctx) return;
+    setProposing(true);
+    try {
+      const res = await api.proposeExclusionMask();
+      const img = new Image();
+      img.onload = () => {
+        ctx.clearRect(0, 0, c.width, c.height);
+        ctx.drawImage(img, 0, 0, c.width, c.height);
+      };
+      img.src = res.mask_png_base64;
+      setStatusMsg(t("exclude.proposedPct", { pct: res.proposed_excluded_pct }));
+      setTimeout(() => setStatusMsg(""), 5000);
+    } catch (err: any) {
+      setStatusMsg(err?.message || "Proposal failed");
+    } finally {
+      setProposing(false);
+    }
+  };
+
   return (
     <div className="space-y-3">
       <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
@@ -174,6 +197,14 @@ export const ExclusionMaskPainter: React.FC<Props> = ({ imageUrl, onSaved }) => 
 
         <div className="flex items-center gap-2">
           {statusMsg && <span className="text-emerald-400 font-mono text-[11px]">{statusMsg}</span>}
+          <button
+            type="button"
+            disabled={proposing}
+            onClick={handlePropose}
+            className="obs-btn-secondary inline-flex items-center gap-1 px-2.5 py-1.5 text-sky-300 border-sky-500/30"
+          >
+            <Sparkles className="w-3.5 h-3.5" /> {proposing ? "..." : t("exclude.autoPropose")}
+          </button>
           <button
             type="button"
             onClick={handleClear}

@@ -71,6 +71,11 @@ export const api = {
       body: JSON.stringify({ mask_png_base64: maskPngBase64 }),
     }),
   clearPaintedExclusionMask: () => request<any>("/api/camera/exclusion-mask", { method: "DELETE" }),
+  proposeExclusionMask: (observationId?: number) =>
+    request<any>(
+      `/api/camera/exclusion-mask/propose${observationId != null ? `?observation_id=${observationId}` : ""}`,
+      { method: "POST" }
+    ),
   testCamera: (payload?: { source_type?: string; source_url?: string; device_index?: number }) =>
     request<any>("/api/camera/test", { method: "POST", body: JSON.stringify(payload || {}) }),
   listCameraDevices: () => request<any>("/api/camera/devices"),

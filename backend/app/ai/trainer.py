@@ -565,8 +565,9 @@ class TrainingManager:
                     model.load_state_dict(compat_state, strict=False)
                 except Exception:
                     pass
+            trainable_params = [p for p in model.parameters() if p.requires_grad]
             optimizer = torch.optim.AdamW(
-                model.parameters(),
+                trainable_params or list(model.parameters()),
                 lr=lr,
                 weight_decay=1e-4,
                 foreach=(device != "directml"),

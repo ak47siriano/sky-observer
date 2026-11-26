@@ -339,6 +339,50 @@ def api_camera_exclusion_mask_delete() -> dict[str, Any]:
     return {"cleared": True}
 
 
+@app.post("/api/camera/exclusion-mask/propose")
+def api_camera_exclusion_mask_propose(
+    observation_id: int | None = None,
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """
+    Auto-propose a static sky-vs-obstacle exclusion mask from the latest (or selected) camera frame.
+    Returns a translucent crimson PNG data URL for user review/refinement; does NOT auto-save.
+    """
+    from app.vision.masking import propose_sky_obstacle_mask
+
+    q = db.query(Observation)
+    obs = (
+        q.filter(Observation.id == observation_id).first()
+        if observation_id is not None
+        else q.filter(Observation.raw_path != "").order_by(Observation.id.desc()).first()
+    )
+    if obs is None or not obs.raw_path or not Path(obs.raw_path).exists():
+        raise HTTPException(status_code=404, detail="No raw camera frame available to propose obstacle mask")
+    img = cv2.imread(obs.raw_path)
+    if img is None or img.size == 0:
+        raise HTTPException(status_code=400, detail="Could not read camera frame from disk")
+
+    cfg = get_config_manager().get()
+    excl_u8, stats = propose_sky_obstacle_mask(
+        img,
+        elevation_deg=cfg.camera.orientation_elevation_deg if cfg.camera.tilt_correction_enabled else None,
+        fov_vertical_deg=cfg.camera.fov_vertical_deg,
+    )
+    w, h = 640, 360
+    mr = cv2.resize(excl_u8, (w, h), interpolation=cv2.INTER_NEAREST) > 127
+    rgba = np.zeros((h, w, 4), dtype=np.uint8)
+    rgba[mr] = [68, 68, 239, 170]
+    ok, buf = cv2.imencode(".png", rgba)
+    if not ok:
+        raise HTTPException(status_code=500, detail="Failed to encode proposed exclusion mask")
+    b64 = base64.b64encode(buf.tobytes()).decode("ascii")
+    return {
+        "observation_id": obs.id,
+        "mask_png_base64": f"data:image/png;base64,{b64}",
+        **stats,
+    }
+
+
 @app.post("/api/camera/test")
 def api_camera_test(req: CameraTestRequest | None = None) -> dict[str, Any]:
     return get_camera_manager().test_connection(

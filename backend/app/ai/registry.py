@@ -45,10 +45,17 @@ class ActiveModelCache:
                     inferred_nc: int | None = None
                     inferred_h = 3
                     inferred_arch = row.architecture
-                    if row.model_family == "segmentation" and isinstance(state, dict) and "head.weight" in state:
-                        inferred_nc = int(state["head.weight"].shape[0])
-                        if any(k.startswith("aspp.") for k in state):
-                            inferred_arch = "CloudSegUNet-ConvNeXt-ASPP"
+                    if row.model_family == "segmentation" and isinstance(state, dict):
+                        if "net.classifier.4.weight" in state:
+                            inferred_nc = int(state["net.classifier.4.weight"].shape[0])
+                            inferred_arch = "DeepLabV3-MobileNetV3"
+                        elif "probe_norm.weight" in state and "head.weight" in state:
+                            inferred_nc = int(state["head.weight"].shape[0])
+                            inferred_arch = "DINOv3-LinearProbe"
+                        elif "head.weight" in state:
+                            inferred_nc = int(state["head.weight"].shape[0])
+                            if any(k.startswith("aspp.") for k in state):
+                                inferred_arch = "CloudSegUNet-ConvNeXt-ASPP"
                     elif row.model_family == "classification" and isinstance(state, dict):
                         if "head.3.weight" in state:
                             inferred_nc = int(state["head.3.weight"].shape[0])
@@ -70,7 +77,8 @@ class ActiveModelCache:
                     )
                     model.load_state_dict(state)
                     # Route GRU-based temporal/event inference on CPU when using DirectML for DX12 stability
-                    model_dev = "cpu" if (device == "directml" and row.model_family in {"temporal", "event"}) else device
+                    use_cpu_dml = device == "directml" and row.model_family in {"temporal", "event"}
+                    model_dev = "cpu" if use_cpu_dml else device
                     try:
                         model.to(to_torch_device(model_dev))
                     except Exception:

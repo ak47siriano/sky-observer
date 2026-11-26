@@ -171,6 +171,8 @@ def process_and_store_frame(
 
     cache = get_model_cache()
     seg_model, seg_meta, seg_dev = cache.get("segmentation")
+    if getattr(config.ai, "seg_backend", "auto") == "radiometric_physics":
+        seg_model, seg_meta = None, None
     cls_model, cls_meta, cls_dev = cache.get("classification")
     seg_miou = float((seg_meta or {}).get("metrics", {}).get("val_miou", 0.5) or 0.0)
     # Gate weak/under-trained checkpoints so they do not override calibrated sky physics
