@@ -1,4 +1,4 @@
-"""Unified Computer Vision Pipeline combining Quality, Masking, Segmentation, Coverage, Motion, Classification, Color & Texture."""
+"""Unified Computer Vision Pipeline (Quality, Masking, Segmentation, Coverage, Motion & Classification)."""
 
 from __future__ import annotations
 
@@ -21,6 +21,12 @@ from app.vision.geometry import (
 )
 from app.vision.masking import build_valid_sky_mask_from_config, neutralize_excluded_pixels
 from app.vision.motion import estimate_cloud_motion
+from app.vision.night import (
+    classify_sky_regime,
+    compute_lunar_position_and_phase,
+    detect_bright_stars,
+    segment_night_sky_adaptive,
+)
 from app.vision.quality import assess_image_quality
 from app.vision.segmentation import run_segmentation
 from app.vision.texture import analyze_texture
@@ -94,6 +100,8 @@ def run_vision_pipeline(
     geo_maps = compute_pixel_geometry_maps(w, h, geom)
     valid_mask = build_valid_sky_mask_from_config((h, w), config.camera)
     solar = compute_solar_position(config.camera.latitude, config.camera.longitude)
+    sky_regime = classify_sky_regime(float(solar.get("elevation_deg", 35.0)))
+    night_mode_active = bool(getattr(config.camera, "night_mode_enabled", True)) and sky_regime == "night"
     sun_prior_map: np.ndarray | None = None
     if geom.tilt_correction_enabled:
         horizon_masked = np.where(geo_maps["above_horizon"], valid_mask, 0).astype(np.uint8)
@@ -119,6 +127,7 @@ def run_vision_pipeline(
             min_quality_score=config.vision.min_quality_score,
             duplicate_threshold=config.camera.duplicate_threshold,
             camera_move_shift_px=config.events.camera_move_shift_px,
+            sky_regime=sky_regime if night_mode_active else "day",
         )
     else:
         from app.vision.quality import QualityResult, compute_dhash
@@ -127,7 +136,7 @@ def run_vision_pipeline(
             quality_score=1.0,
             is_usable=True,
             flags=[],
-            metrics={"dhash": compute_dhash(image_bgr), "flags": []},
+            metrics={"dhash": compute_dhash(image_bgr), "flags": [], "sky_regime": sky_regime},
             frame_hash="",
         )
 
@@ -174,18 +183,32 @@ def run_vision_pipeline(
             valid_sky_mask=valid_mask,
         )
 
-    # 7.3 Cloud segmentation
-    seg_out = run_segmentation(
-        image_bgr=image_bgr,
-        valid_mask=valid_mask,
-        inference_resolution=config.vision.inference_resolution,
-        uncertainty_entropy_threshold=config.vision.uncertainty_entropy_threshold,
-        seg_model=seg_model if config.vision.cloud_segmentation_enabled else None,
-        device=device,
-        model_name=seg_model_name,
-        sun_prior_map=sun_prior_map,
-        nn_weight=seg_nn_weight,
-    )
+    # 7.3 Cloud segmentation (daytime physics/NN or adaptive night segmentation when astronomical night)
+    night_telemetry: dict[str, Any] | None = None
+    if night_mode_active and seg_model is None:
+        lunar_info = compute_lunar_position_and_phase(config.camera.latitude, config.camera.longitude)
+        star_info = detect_bright_stars(image_bgr, valid_mask)
+        seg_out, night_telemetry = segment_night_sky_adaptive(
+            image_bgr=image_bgr,
+            valid_mask=valid_mask,
+            inference_resolution=config.vision.inference_resolution,
+            night_baseline_luminance=getattr(config.camera, "night_clear_baseline_l", None),
+            urban_light_pollution=getattr(config.camera, "night_urban_light_pollution", None),
+            lunar_info=lunar_info,
+            star_info=star_info,
+        )
+    else:
+        seg_out = run_segmentation(
+            image_bgr=image_bgr,
+            valid_mask=valid_mask,
+            inference_resolution=config.vision.inference_resolution,
+            uncertainty_entropy_threshold=config.vision.uncertainty_entropy_threshold,
+            seg_model=seg_model if config.vision.cloud_segmentation_enabled else None,
+            device=device,
+            model_name=seg_model_name,
+            sun_prior_map=sun_prior_map,
+            nn_weight=seg_nn_weight,
+        )
 
     # 7.4 Cloud coverage
     coverage_metrics = compute_cloud_coverage(
@@ -205,6 +228,11 @@ def run_vision_pipeline(
         if geom.tilt_correction_enabled
         else None,
     )
+    coverage_metrics["sky_regime"] = sky_regime
+    coverage_metrics["solar_elevation_deg"] = solar.get("elevation_deg")
+    if night_telemetry is not None:
+        coverage_metrics["night_telemetry"] = night_telemetry
+    color_metrics["sky_regime"] = sky_regime
 
     # 7.8 Texture & fragmentation
     texture_metrics = analyze_texture(
@@ -222,7 +250,8 @@ def run_vision_pipeline(
         dense_p = float(coverage_metrics.get("dense_cloud_pct", 0.0))
         dark_p = float(coverage_metrics.get("dark_cloud_pct", 0.0))
         tot_p = thin_p + dense_p + dark_p
-        eff_alt_m = ((thin_p * 4500.0 + dense_p * 1600.0 + dark_p * 1100.0) / tot_p) if tot_p >= 1.0 else geom.cloud_altitude_m
+        weighted_alt = (thin_p * 4500.0 + dense_p * 1600.0 + dark_p * 1100.0) / tot_p if tot_p >= 1.0 else None
+        eff_alt_m = weighted_alt if weighted_alt is not None else geom.cloud_altitude_m
 
     if config.vision.optical_flow_enabled:
         motion_metrics, motion_overlay = estimate_cloud_motion(

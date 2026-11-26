@@ -185,10 +185,21 @@ def auto_label_local_observations(
         .all()
     )
 
+    _QC_EXCLUDE_FLAGS = {
+        "window_reflection",
+        "ae_awb_jump",
+        "raindrop_smudge",
+        "heavy_jpeg_blocking",
+        "camera_movement",
+    }
     seen_hashes: set[str] = set()
     unique_valid: list[Observation] = []
     for obs in candidates:
         if not obs.raw_path or not Path(obs.raw_path).exists():
+            continue
+        q_meta = safe_json_loads(obs.quality_metrics_json, {})
+        q_flags = set(q_meta.get("flags") or [])
+        if q_flags & _QC_EXCLUDE_FLAGS:
             continue
         fhash = (obs.frame_hash or "").strip()
         if fhash:

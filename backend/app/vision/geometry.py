@@ -39,6 +39,7 @@ class CameraGeometry:
     fov_vertical_deg: float
     cloud_altitude_m: float
     tilt_correction_enabled: bool
+    max_projection_zenith_deg: float = 70.0
 
     @property
     def tilt_from_vertical_deg(self) -> float:
@@ -67,6 +68,7 @@ def geometry_from_camera_config(
     alt = float(cam.assumed_cloud_altitude_m) if cam.assumed_cloud_altitude_m else DEFAULT_PROJECTION_CLOUD_ALTITUDE_M
     alt = max(100.0, min(15000.0, alt))
     enabled = bool(getattr(cam, "tilt_correction_enabled", True))
+    max_z = _clamp(getattr(cam, "max_projection_zenith_deg", 70.0), 30.0, 88.0)
     return CameraGeometry(
         elevation_deg=el,
         azimuth_deg=az,
@@ -75,6 +77,7 @@ def geometry_from_camera_config(
         fov_vertical_deg=fov_v,
         cloud_altitude_m=alt,
         tilt_correction_enabled=enabled,
+        max_projection_zenith_deg=max_z,
     )
 
 
@@ -490,6 +493,7 @@ def compute_radar_footprint(
         "fov_vertical_deg": round(geom.fov_vertical_deg, 2),
         "cloud_altitude_m": round(geom.cloud_altitude_m, 1),
         "cloud_altitude_source": cloud_altitude_source,
+        "max_projection_zenith_deg": round(geom.max_projection_zenith_deg, 1),
         "center_distance_km": round(center_dist_km, 2),
         "near_distance_km": round(near_dist_km, 2),
         "far_distance_km": round(far_dist_km, 2),
@@ -692,14 +696,27 @@ def project_mask_to_radar_bgra(
     )
     warped_stack[~in_fov] = 0.0
 
-    # Combine physical elevation taper (prevents extreme radial streaking below 5 deg) with outer-rim radial fade
+    # Enforce configurable zenith cutoff (default <= 70 deg -> elevation >= 20 deg) and strictly exclude <= 0 deg
     horiz_dist = np.hypot(east_grid, north_grid).astype(np.float32)
     el_deg_grid = np.degrees(np.arctan2(geom.cloud_altitude_m, np.maximum(horiz_dist, 1.0))).astype(np.float32)
-    el_t = np.clip((el_deg_grid - MIN_HORIZON_ELEVATION_DEG) / 5.5, 0.0, 1.0)
+    zenith_deg_grid = 90.0 - el_deg_grid
+    max_z = float(np.clip(getattr(geom, "max_projection_zenith_deg", 70.0), 30.0, 88.0))
+    # Only enforce steep zenith cutoff if camera elevation is high enough to have sky within max_z;
+    # for near-horizon cameras (elevation < 90 - max_z + 5), fall back gracefully to MIN_HORIZON_ELEVATION_DEG
+    # while still decaying opacity with zenith angle so low-elevation uncertainty is visually honest.
+    min_el_z = max(MIN_HORIZON_ELEVATION_DEG, 90.0 - max_z)
+    eff_min_el = min_el_z if geom.elevation_deg >= (90.0 - max_z + 5.0) else MIN_HORIZON_ELEVATION_DEG
+    below_cutoff = (el_deg_grid <= 0.0) | (el_deg_grid < eff_min_el)
+    warped_stack[below_cutoff] = 0.0
+    in_fov = in_fov & (~below_cutoff)
+
+    # Smooth uncertainty opacity decay as zenith angle & distance increase (tan(zenith) error grows near horizon)
+    el_t = np.clip((el_deg_grid - eff_min_el) / 10.0, 0.0, 1.0)
     el_fade = el_t * el_t * (3.0 - 2.0 * el_t)
+    zenith_unc_fade = np.clip(1.0 - np.maximum(0.0, zenith_deg_grid - 45.0) / 50.0, 0.30, 1.0)
     radial_norm = horiz_dist / max(float(r_m), 1.0)
     radial_fade = np.clip((1.0 - radial_norm) / 0.18, 0.0, 1.0)
-    horizon_fade = (el_fade * radial_fade).astype(np.float32)
+    horizon_fade = (el_fade * zenith_unc_fade * radial_fade).astype(np.float32)
 
     return _render_volumetric_cloud_bgra(warped_stack, fov_mask=in_fov, horizon_fade=horizon_fade)
 
@@ -913,7 +930,8 @@ def estimate_camera_tilt_from_frame(
         tilt_correction_enabled=True,
     )
     est_maps = compute_pixel_geometry_maps(64, 48, est_geom)
-    inlier_frac = float(np.count_nonzero(np.abs(y_pts - (b_fit + slope_fit * (x_pts - cx_w))) <= tol_px * 1.25)) / max(1, m_pts)
+    inlier_cnt = np.count_nonzero(np.abs(y_pts - (b_fit + slope_fit * (x_pts - cx_w))) <= tol_px * 1.25)
+    inlier_frac = float(inlier_cnt) / max(1, m_pts)
     conf = float(np.clip(0.45 * min(1.0, med_sep / 0.42) + 0.35 * inlier_frac + 0.20 * (n_strong / n_cols), 0.25, 0.97))
 
     return {
@@ -925,4 +943,81 @@ def estimate_camera_tilt_from_frame(
         "horizon_y_norm": round(float(np.clip(b_fit / work_h, 0.0, 1.2)), 4),
         "below_horizon_pct": float(est_maps["below_horizon_pct"]),
         "confidence": round(conf, 2),
+    }
+
+
+def refine_azimuth_from_sun(
+    image_bgr: np.ndarray,
+    valid_mask: np.ndarray,
+    geom: CameraGeometry,
+    lat: float,
+    lon: float,
+    dt_utc: datetime | None = None,
+) -> dict[str, Any]:
+    """
+    Refine camera compass azimuth by matching the brightest solar-disk centroid observed
+    inside the valid sky mask against the astronomical NOAA solar azimuth at `dt_utc`.
+    Returns proposed azimuth and residual error in degrees for user confirmation before applying.
+    """
+    solar = compute_solar_position(lat, lon, dt_utc)
+    sun_el = float(solar["elevation_deg"])
+    sun_az = float(solar["azimuth_deg"])
+    if sun_el < 3.0:
+        return {
+            "ok": False,
+            "reason": "Sun is below 3 deg elevation; solar azimuth refinement requires daylight sun in FOV.",
+            "solar": solar,
+        }
+
+    h, w = image_bgr.shape[:2]
+    vm = valid_mask > 0 if (valid_mask is not None and valid_mask.shape[:2] == (h, w)) else np.ones((h, w), dtype=bool)
+    gray = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2GRAY)
+    sky_vals = gray[vm]
+    if sky_vals.size < 100 or float(np.max(sky_vals)) < 245.0:
+        return {
+            "ok": False,
+            "reason": "No saturated solar disk detected inside valid sky region.",
+            "solar": solar,
+        }
+
+    sun_px = (gray >= 248) & vm
+    n_sun = int(np.count_nonzero(sun_px))
+    if n_sun < 8 or n_sun > int(0.18 * vm.sum()):
+        return {
+            "ok": False,
+            "reason": "Bright clipped area is either too small or too wide (overcast glare) to locate solar disk.",
+            "solar": solar,
+        }
+
+    ys, xs = np.where(sun_px)
+    u_sun = float(np.mean(xs))
+    v_sun = float(np.mean(ys))
+
+    # Compute ray azimuth & elevation of observed centroid under current camera orientation
+    r_cam, u_cam, f_cam = camera_basis_enu(geom.elevation_deg, geom.azimuth_deg, geom.roll_deg)
+    fx, fy, cx, cy = focal_lengths_px(w, h, geom)
+    xc = (u_sun - cx) / fx
+    yc = (cy - v_sun) / fy
+    ray = xc * r_cam + yc * u_cam + f_cam
+    ray = ray / max(1e-9, float(np.linalg.norm(ray)))
+
+    obs_el_deg = math.degrees(math.asin(max(-1.0, min(1.0, float(ray[2])))))
+    obs_az_deg = math.degrees(math.atan2(float(ray[0]), float(ray[1]))) % 360.0
+
+    # Minimal signed angular difference (sun_az - obs_az) in [-180, +180]
+    delta_az = ((sun_az - obs_az_deg + 180.0) % 360.0) - 180.0
+    proposed_az = round((geom.azimuth_deg + delta_az) % 360.0, 2)
+    el_residual = abs(sun_el - obs_el_deg)
+
+    # Confidence drops if elevation mismatch is large (implies sun-like cloud patch or wrong tilt)
+    conf = round(float(np.clip(1.0 - el_residual / 25.0, 0.15, 0.96)), 2)
+    return {
+        "ok": True,
+        "current_azimuth_deg": round(geom.azimuth_deg, 2),
+        "proposed_azimuth_deg": proposed_az,
+        "delta_azimuth_deg": round(delta_az, 2),
+        "residual_elevation_deg": round(el_residual, 2),
+        "observed_sun_uv": [round(u_sun / max(1, w - 1), 4), round(v_sun / max(1, h - 1), 4)],
+        "confidence": conf,
+        "solar": solar,
     }

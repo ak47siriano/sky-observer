@@ -331,10 +331,20 @@ def generate_forecasts_for_observation(
             if config.forecast.rain_prediction_enabled:
                 precip_prob = round(0.70 * precip_prob + 0.30 * float(nn_probs[4]), 3)
 
-        # Confidence decays gracefully with forecast horizon, FOV transit, and historical skill vs persistence
+        # Confidence decays gracefully with forecast horizon, FOV transit, sky regime, QC artifacts & skill
         hist_factor = min(1.0, len(recent_obs) / 5.0)
         horizon_decay = max(0.32, 1.0 - (h_min / 95.0))
         online_boost = 0.08 if online_data is not None else 0.0
+        sky_regime = str(cov_meta.get("sky_regime", "day"))
+        q_flags_curr = set(safe_json_loads(latest_obs.quality_metrics_json, {}).get("flags") or [])
+        hw_qc_flags = q_flags_curr & {
+            "window_reflection",
+            "ae_awb_jump",
+            "raindrop_smudge",
+            "heavy_jpeg_blocking",
+        }
+        regime_mult = 0.65 if sky_regime == "night" else (0.85 if sky_regime == "twilight" else 1.0)
+        qc_mult = 0.80 if hw_qc_flags else 1.0
         conf = float(
             np.clip(
                 latest_obs.quality_score * 0.35
@@ -346,14 +356,21 @@ def generate_forecasts_for_observation(
                 0.95,
             )
             * horizon_decay
+            * regime_mult
+            * qc_mult
         )
 
-        # Honest reliability assessment vs persistence & narrow camera FOV limits
+        # Honest reliability assessment vs persistence, narrow camera FOV, night mode & hardware QC limits
         h_stat = hist_by_horizon.get(str(h_min), {})
         h_count = int(h_stat.get("count", 0) or 0)
         h_skill = h_stat.get("skill_vs_persistence")
         low_reliability = False
         reliability_reasons: list[str] = []
+        if sky_regime == "night":
+            low_reliability = True
+            reliability_reasons.append("night_mode_reduced_optical_visibility")
+        if hw_qc_flags:
+            reliability_reasons.append("hardware_qc_flags:" + ",".join(sorted(hw_qc_flags)))
         if h_count >= 3 and h_skill is not None and float(h_skill) <= 0.0:
             low_reliability = True
             reliability_reasons.append(f"skill_vs_persistence={h_skill:+.2f}_does_not_beat_persistence")

@@ -35,6 +35,7 @@ def assess_image_quality(
     min_quality_score: float = 0.40,
     duplicate_threshold: float = 0.015,
     camera_move_shift_px: float = 18.0,
+    sky_regime: str = "day",
 ) -> QualityResult:
     """Detect blur, darkness, overexposure, glare, obstruction, corruption, duplicates, and camera shift."""
     if image_bgr is None or image_bgr.size == 0 or image_bgr.ndim != 3 or image_bgr.shape[2] != 3:
@@ -107,11 +108,15 @@ def assess_image_quality(
     flags: list[str] = []
     penalties = 0.0
 
-    # Darkness
-    if mean_lum < 22.0 or p95_lum < 45.0:
+    # Darkness (relaxed during astronomical night so adaptive night sky analysis can proceed)
+    is_night_regime = sky_regime == "night"
+    if (mean_lum < 22.0 or p95_lum < 45.0) and not is_night_regime:
         flags.append("excessively_dark")
         penalties += 0.55
-    elif mean_lum < 42.0:
+    elif is_night_regime and (mean_lum < 1.5 and std_lum < 1.2):
+        flags.append("excessively_dark")
+        penalties += 0.55
+    elif mean_lum < 42.0 and not is_night_regime:
         flags.append("low_light")
         penalties += 0.20
 
@@ -126,7 +131,10 @@ def assess_image_quality(
         penalties += 0.30
 
     # Lens obstruction (e.g., hand/cap/mud blocking lens)
-    if (dark_blob_ratio > 0.60 and entropy < 2.2) or (entropy < 1.35 and std_lum < 8.0 and mean_lum < 90.0):
+    if (
+        (dark_blob_ratio > 0.60 and entropy < 2.2 and not is_night_regime)
+        or (entropy < 1.35 and std_lum < 8.0 and mean_lum < 90.0 and not is_night_regime)
+    ):
         flags.append("lens_obstruction")
         penalties += 0.65
 
@@ -135,10 +143,57 @@ def assess_image_quality(
         flags.append("blurry_image")
         penalties += 0.35
 
-    # Duplicate frame & camera movement check against previous frame
+    # Low-cost hardware QC 1: Heavy 8x8 JPEG blockiness (e.g., high-compression ESP32-CAM)
+    g_f = gray.astype(np.float32)
+    h_diff = np.abs(np.diff(g_f, axis=1))
+    v_diff = np.abs(np.diff(g_f, axis=0))
+    b_cols = np.arange(7, h_diff.shape[1], 8)
+    b_rows = np.arange(7, v_diff.shape[0], 8)
+    inner_cols = np.setdiff1d(np.arange(h_diff.shape[1]), b_cols)
+    inner_rows = np.setdiff1d(np.arange(v_diff.shape[0]), b_rows)
+    bnd_grad = 0.5 * (float(np.mean(h_diff[:, b_cols])) + float(np.mean(v_diff[b_rows, :])))
+    int_grad = 0.5 * (float(np.mean(h_diff[:, inner_cols])) + float(np.mean(v_diff[inner_rows, :])))
+    blocking_ratio = float(bnd_grad / max(int_grad, 0.35)) if bnd_grad > 2.5 else 1.0
+    if blocking_ratio > 1.75 and bnd_grad > 4.0:
+        flags.append("heavy_jpeg_blocking")
+        penalties += 0.18
+
+    # Low-cost hardware QC 2: Window-glass interior reflection (sharp bright specular patches in evening/dim sky)
+    specular_px = (sky_gray > max(160.0, mean_lum + 85.0)) & (sky_sat < 95)
+    reflection_ratio = float(np.mean(specular_px))
+    if (
+        (mean_lum < 75.0 or sky_regime in {"twilight", "night"})
+        and 0.015 <= reflection_ratio <= 0.30
+        and lap_var_sky > 65.0
+    ):
+        flags.append("window_reflection")
+        penalties += 0.22
+
+    # Low-cost hardware QC 3: Localized raindrop / lens smudge (isolated sharp-to-blurry patch drop)
+    lap_map = np.abs(cv2.Laplacian(gray, cv2.CV_32F))
+    tile_vars: list[float] = []
+    th, tw = 240 // 4, 320 // 4
+    for r_i in range(4):
+        for c_i in range(4):
+            tm = m_small[r_i * th : (r_i + 1) * th, c_i * tw : (c_i + 1) * tw]
+            if int(tm.sum()) >= 120:
+                tile_vars.append(float(np.var(lap_map[r_i * th : (r_i + 1) * th, c_i * tw : (c_i + 1) * tw][tm])))
+    smudge_score = 0.0
+    if len(tile_vars) >= 6:
+        med_tv = float(np.median(tile_vars))
+        min_tv = float(np.min(tile_vars))
+        if med_tv > 18.0:
+            smudge_score = round(float(1.0 - min_tv / med_tv), 3)
+            if min_tv < med_tv * 0.12 and float(np.max(tile_vars)) > med_tv * 1.4:
+                flags.append("raindrop_smudge")
+                penalties += 0.15
+
+    # Duplicate frame, AE/AWB jump & camera movement check against previous frame
     frame_mad = 1.0
     camera_shift_px = 0.0
     orientation_change_score = 0.0
+    ae_jump_delta = 0.0
+    awb_jump_delta = 0.0
 
     if prev_bgr is not None and prev_bgr.shape[:2] == image_bgr.shape[:2]:
         prev_small = cv2.resize(prev_bgr, (320, 240), interpolation=cv2.INTER_AREA)
@@ -146,7 +201,21 @@ def assess_image_quality(
             prev_small = prev_small.copy()
             prev_small[~m_small] = np.mean(prev_small[m_small], axis=0).astype(np.uint8)
         prev_gray = cv2.cvtColor(prev_small, cv2.COLOR_BGR2GRAY)
-        frame_mad = float(np.mean(np.abs(gray[m_small].astype(np.float32) - prev_gray[m_small].astype(np.float32))) / 255.0)
+        prev_mean_lum = float(np.mean(prev_gray[m_small]))
+        ae_jump_delta = float(mean_lum - prev_mean_lum)
+
+        curr_b = float(np.mean(work[:, :, 0][m_small])) + 1.0
+        curr_r = float(np.mean(work[:, :, 2][m_small])) + 1.0
+        prev_b = float(np.mean(prev_small[:, :, 0][m_small])) + 1.0
+        prev_r = float(np.mean(prev_small[:, :, 2][m_small])) + 1.0
+        awb_jump_delta = float((curr_r / curr_b) - (prev_r / prev_b))
+        if abs(ae_jump_delta) > 26.0 or abs(awb_jump_delta) > 0.28:
+            flags.append("ae_awb_jump")
+            penalties += 0.16
+
+        frame_mad = float(
+            np.mean(np.abs(gray[m_small].astype(np.float32) - prev_gray[m_small].astype(np.float32))) / 255.0
+        )
         if frame_mad < duplicate_threshold:
             flags.append("repeated_identical_frame")
 
@@ -168,7 +237,7 @@ def assess_image_quality(
             camera_shift_px = float(np.hypot(dx * scale_x, dy * scale_y))
             orientation_change_score = float(response)
             effective_shift_thresh = max(float(camera_move_shift_px), 0.035 * float(min(w, h)))
-            # Require meaningful shift on both native and analysis grids + clean phase peak to avoid sky drift false alerts
+            # Require meaningful shift on both native and analysis grids + clean phase peak to avoid false alerts
             if (
                 camera_shift_px > effective_shift_thresh
                 and shift_small_px >= 4.0
@@ -202,6 +271,12 @@ def assess_image_quality(
         "frame_mad": round(frame_mad, 4),
         "camera_shift_px": round(camera_shift_px, 2),
         "phase_corr_response": round(orientation_change_score, 3),
+        "blocking_ratio": round(blocking_ratio, 3),
+        "reflection_ratio": round(reflection_ratio, 4),
+        "smudge_score": round(smudge_score, 3),
+        "ae_jump_delta": round(ae_jump_delta, 2),
+        "awb_jump_delta": round(awb_jump_delta, 3),
+        "sky_regime": sky_regime,
         "dhash": dhash,
         "flags": flags,
     }

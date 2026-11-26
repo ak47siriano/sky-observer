@@ -241,9 +241,22 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({
                     )}
                   </div>
                   {obs && (
-                    <div className="text-xs font-medium text-sky-300 mt-0.5 flex items-center gap-1.5">
+                    <div className="text-xs font-medium text-sky-300 mt-0.5 flex flex-wrap items-center gap-1.5">
                       <span className="w-1.5 h-1.5 rounded-full bg-sky-400" />
-                      {tEnum(obs.coverage?.trend || "unavailable")}
+                      <span>{tEnum(obs.coverage?.trend || "unavailable")}</span>
+                      {obs.coverage?.sky_regime && obs.coverage.sky_regime !== "day" && (
+                        <span className="px-1.5 py-0.5 rounded bg-indigo-500/20 border border-indigo-400/30 text-indigo-200 font-mono text-[9px] uppercase">
+                          {obs.coverage.sky_regime}
+                        </span>
+                      )}
+                      {Array.isArray(obs.quality?.flags) && obs.quality.flags.length > 0 && (
+                        <span
+                          title={obs.quality.flags.join(", ")}
+                          className="px-1.5 py-0.5 rounded bg-amber-500/15 border border-amber-500/30 text-amber-300 font-mono text-[9px]"
+                        >
+                          QC: {obs.quality.flags[0]}
+                        </span>
+                      )}
                     </div>
                   )}
                 </div>

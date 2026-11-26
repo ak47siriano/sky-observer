@@ -101,6 +101,14 @@ export const RadarTelemetrySidebar: React.FC<RadarTelemetrySidebarProps> = ({
               </span>
               {altSource && <span>Base ~{altM} m</span>}
             </div>
+            <div className="py-1 flex flex-wrap items-center justify-between gap-1 text-[10px] font-mono text-[#7C8596]">
+              <span>
+                Height: {altSource === "open_meteo_lcl" ? "LCL (Open-Meteo)" : altSource === "manual_config" ? "Manual" : altSource === "cloud_class_heuristic" ? "Class Est." : "Default 2000m"}
+              </span>
+              <span>
+                Zenith ≤ {Math.round(Number(state?.camera_projection?.max_projection_zenith_deg ?? 70))}°
+              </span>
+            </div>
             <div className="pt-2 grid grid-cols-3 divide-x divide-[#262B34] text-center font-mono tabular-nums text-[11px]">
               <div className="px-1">
                 <div className="text-[#8D96A5]">{t("overview.thin")}</div>

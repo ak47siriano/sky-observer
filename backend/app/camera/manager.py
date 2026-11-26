@@ -114,7 +114,8 @@ def validate_camera_source_url(
         return clean_url
 
     try:
-        infos = socket.getaddrinfo(host, parts.port or (443 if scheme in {"https", "rtsps"} else 80), type=socket.SOCK_STREAM)
+        port = parts.port or (443 if scheme in {"https", "rtsps"} else 80)
+        infos = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
     except socket.gaierror as exc:
         raise ValueError(f"Unable to resolve camera host '{host}'") from exc
 
@@ -200,7 +201,9 @@ class CameraManager:
         img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
         return img
 
-    def _safe_http_get(self, url: str, timeout: float, source_type: str, headers: dict[str, str] | None = None) -> httpx.Response:
+    def _safe_http_get(
+        self, url: str, timeout: float, source_type: str, headers: dict[str, str] | None = None
+    ) -> httpx.Response:
         current_url = validate_camera_source_url(url, source_type=source_type)
         with httpx.Client(timeout=timeout, follow_redirects=False, headers=headers) as client:
             for _ in range(4):
@@ -579,6 +582,70 @@ class CameraManager:
             "device_index": cfg.device_index,
             "latency_ms": round(res.latency_ms, 2),
             "message": res.error,
+        }
+
+    def fetch_ipwebcam_orientation(self, source_url: str, timeout: float = 4.0) -> dict[str, Any]:
+        """
+        Read optional Android IP Webcam `/sensors.json` endpoint from a LAN camera URL
+        and derive elevation (pitch above horizon), roll, and compass azimuth.
+        """
+        if not source_url or not source_url.strip():
+            raise ValueError("Camera source_url is empty")
+        parsed = urlparse(source_url.strip())
+        if parsed.scheme.lower() not in {"http", "https"} or not parsed.netloc:
+            raise ValueError("Android IP Webcam sensors require an http:// or https:// camera URL")
+        sensors_url = f"{parsed.scheme}://{parsed.netloc}/sensors.json"
+        resp = self._safe_http_get(sensors_url, timeout=timeout, source_type="http_snapshot")
+        data = resp.json()
+        if not isinstance(data, dict):
+            raise ValueError("Unexpected /sensors.json payload")
+
+        def _latest_vec(keys: tuple[str, ...]) -> list[float] | None:
+            for k in keys:
+                entry = data.get(k)
+                if isinstance(entry, dict) and isinstance(entry.get("data"), list) and entry["data"]:
+                    last = entry["data"][-1]
+                    if isinstance(last, list) and len(last) >= 2 and isinstance(last[1], list):
+                        return [float(v) for v in last[1]]
+            return None
+
+        accel = _latest_vec(("accel", "gravity", "lin_accel"))
+        orient = _latest_vec(("orientation", "rot_vector"))
+        mag = _latest_vec(("mag",))
+
+        if accel is None and orient is None:
+            raise ValueError("No accelerometer or orientation sensor streams found in /sensors.json")
+
+        import math
+
+        elevation_deg = 65.0
+        roll_deg = 0.0
+        azimuth_deg: float | None = None
+        sources_used: list[str] = []
+
+        if accel is not None and len(accel) >= 3:
+            ax, ay, az = accel[0], accel[1], accel[2]
+            norm = math.sqrt(ax * ax + ay * ay + az * az) or 9.81
+            # Back-camera looks along -Z in Android device frame; zenith angle from +Z gravity component
+            sin_el = max(-1.0, min(1.0, -az / norm))
+            elevation_deg = round(math.degrees(math.asin(sin_el)), 2)
+            roll_deg = round(max(-45.0, min(45.0, math.degrees(math.atan2(ax, max(1e-3, abs(ay) + abs(az)))))), 2)
+            sources_used.append("accelerometer")
+
+        if orient is not None and len(orient) >= 1:
+            azimuth_deg = round(float(orient[0]) % 360.0, 2)
+            sources_used.append("orientation")
+        elif mag is not None and len(mag) >= 2:
+            azimuth_deg = round(math.degrees(math.atan2(mag[0], mag[1])) % 360.0, 2)
+            sources_used.append("magnetometer")
+
+        return {
+            "ok": True,
+            "sensors_url": mask_url_credentials(sensors_url),
+            "sources_used": sources_used,
+            "orientation_elevation_deg": max(-20.0, min(90.0, elevation_deg)),
+            "orientation_roll_deg": roll_deg,
+            "orientation_azimuth_deg": azimuth_deg,
         }
 
 

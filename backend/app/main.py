@@ -1559,6 +1559,74 @@ def api_camera_geometry_auto_detect(
     return result
 
 
+@app.post("/api/camera/geometry/from-sensors")
+def api_camera_geometry_from_sensors(
+    apply: bool = False,
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Read Android IP Webcam /sensors.json (accelerometer + compass) to propose camera tilt & heading."""
+    cfg = get_config_manager().get()
+    try:
+        res = get_camera_manager().fetch_ipwebcam_orientation(cfg.camera.source_url, timeout=cfg.camera.timeout_seconds)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    out: dict[str, Any] = {**res, "applied": bool(apply)}
+    if apply:
+        patch: dict[str, Any] = {
+            "orientation_elevation_deg": res["orientation_elevation_deg"],
+            "orientation_roll_deg": res["orientation_roll_deg"],
+            "tilt_correction_enabled": True,
+        }
+        if res.get("orientation_azimuth_deg") is not None:
+            patch["orientation_azimuth_deg"] = res["orientation_azimuth_deg"]
+        out["geometry"] = _apply_camera_geometry_and_recalculate(db, patch, recalculate_latest=True)
+    return out
+
+
+@app.post("/api/camera/geometry/refine-sun")
+def api_camera_geometry_refine_sun(
+    apply: bool = False,
+    observation_id: int | None = None,
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Refine compass azimuth using observed solar disk centroid inside FOV vs astronomical sun azimuth."""
+    from app.vision.geometry import refine_azimuth_from_sun
+
+    cfg = get_config_manager().get()
+    q = db.query(Observation)
+    obs = (
+        q.filter(Observation.id == observation_id).first()
+        if observation_id is not None
+        else q.filter(Observation.is_usable.is_(True), Observation.raw_path != "").order_by(Observation.id.desc()).first()
+    )
+    if obs is None or not obs.raw_path or not Path(obs.raw_path).exists():
+        raise HTTPException(status_code=404, detail="No usable camera frame available for solar calibration")
+    img = cv2.imread(obs.raw_path)
+    if img is None or img.size == 0:
+        raise HTTPException(status_code=400, detail="Could not read frame from disk")
+
+    h, w = img.shape[:2]
+    geom = geometry_from_camera_config(cfg.camera, width=w, height=h)
+    valid_mask = build_valid_sky_mask_from_config((h, w), cfg.camera)
+    res = refine_azimuth_from_sun(
+        image_bgr=img,
+        valid_mask=valid_mask,
+        geom=geom,
+        lat=cfg.camera.latitude,
+        lon=cfg.camera.longitude,
+        dt_utc=obs.captured_at,
+    )
+    out: dict[str, Any] = {**res, "observation_id": obs.id, "applied": False}
+    if apply and res.get("ok"):
+        out["applied"] = True
+        out["geometry"] = _apply_camera_geometry_and_recalculate(
+            db,
+            {"orientation_azimuth_deg": res["proposed_azimuth_deg"], "tilt_correction_enabled": True},
+            recalculate_latest=True,
+        )
+    return out
+
+
 @app.put("/api/radar/location")
 def api_radar_location_put(req: RadarLocationRequest, db: Session = Depends(get_db)) -> dict[str, Any]:
     cur_cfg = get_config_manager().get()

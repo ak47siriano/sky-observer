@@ -102,6 +102,10 @@ class CameraConfig(BaseModel):
     orientation_elevation_deg: float = Field(default=65.0, ge=-20.0, le=90.0)
     orientation_roll_deg: float = Field(default=0.0, ge=-45.0, le=45.0)
     tilt_correction_enabled: bool = True
+    max_projection_zenith_deg: float = Field(default=70.0, ge=30.0, le=88.0)
+    night_mode_enabled: bool = True
+    night_urban_light_pollution: bool | None = None
+    night_clear_baseline_l: float | None = Field(default=None, ge=1.0, le=50.0)
     fov_horizontal_deg: float | None = Field(default=72.0, ge=10.0, le=180.0)
     fov_vertical_deg: float | None = Field(default=45.0, ge=10.0, le=180.0)
     assumed_cloud_altitude_m: float | None = Field(default=None, ge=100.0, le=15000.0)
