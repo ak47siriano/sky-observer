@@ -120,7 +120,7 @@ flowchart LR
 ### 📐 1-Click Auto-Horizon, 3D Camera Tilt (`0°–110°`) & Flexible Video Sources
 * **Automatic Horizon & Roll Detection**: Click **Auto-Detect Horizon & Roll** in Settings or the Radar Tilt drawer to estimate camera elevation and horizon roll directly from your live skyline image (immune to narrow building spikes, with zenith auto-fallback).
 * **Exact 3D Horizon HUD & Calibrator**: Interactive 2D side-profile & compass calibrator supporting **zenith (`0°`), tilted, horizontal (`90°`), and downward-angled panoramic webcams (up to `110°` / `El -20°`)**, with exact clipped below-horizon shading, elevation iso-curves (`15°–75°`), and NOAA sun position overlay.
-* **Any Camera or Live Web Stream**: Supports Android **Iriun Webcam**, **IP Webcam** (`HTTP Snapshot` / `MJPEG`), **RTSP**, local USB cameras, file uploads, and **Public Web Live Streams (`web_stream`)** including direct `.m3u8` HLS playlists and **SkylineWebcams** pages.
+* **Any Camera or Live Web Stream**: Supports Android **Iriun Webcam**, **IP Webcam** (`HTTP Snapshot` / `MJPEG`), **RTSP**, local USB cameras, file uploads, and **Public Web Live Streams (`web_stream`)** including direct `.m3u8` HLS playlists and **SkylineWebcams** pages. *(Note: when using third-party public streams, ensure you have permission to use the feed and comply with the provider's Terms of Service.)*
 * **Freehand Exclusion Mask Painter**: Paint out roofs, trees, poles, ocean/buildings, or camera watermarks so only pure sky is analyzed.
 
 ### 🎬 Meteo HUD Timelapse, Auto Daily Digest & Analytics Export

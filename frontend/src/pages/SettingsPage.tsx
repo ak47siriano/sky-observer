@@ -317,6 +317,9 @@ export const SettingsPage: React.FC<{
                     {t("settings.test")}
                   </button>
                 </div>
+                {cfg.camera.source_type === "web_stream" && (
+                  <p className="text-[11px] text-amber-300/90 pt-1">{t("settings.webStreamTosNotice")}</p>
+                )}
               </label>
             )}
 

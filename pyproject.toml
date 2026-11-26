@@ -1,3 +1,11 @@
+[project]
+name = "sky-observer"
+version = "1.0.0"
+description = "Local-first AI Sky Observatory, Projected Cloud Map & Short-Term Nowcasting"
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.11"
+
 [tool.ruff]
 line-length = 120
 target-version = "py311"
