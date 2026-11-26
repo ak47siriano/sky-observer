@@ -33,9 +33,19 @@ def test_image_quality_checks():
     res_over = assess_image_quality(bright)
     assert res_over.is_usable is False
 
-    # Identical duplicate frame detection
+    # Identical duplicate frame detection (truly frozen buffer)
     res_dup = assess_image_quality(sky_img, prev_bgr=sky_img.copy())
     assert "repeated_identical_frame" in res_dup.flags
+
+    # Calm clear sky with natural sensor noise / subtle cloud motion (MAD ~ 0.003) must NOT false-trigger duplicate
+    clear_sky = np.full((240, 320, 3), (205, 145, 70), dtype=np.uint8)
+    clear_sky[20:45, 40:90] = (242, 242, 244)
+    rng = np.random.default_rng(42)
+    clear_next = clear_sky.copy()
+    clear_next[20:45, 44:94] = (242, 242, 244)  # subtle 4px cloud drift on small 10% cloud patch
+    clear_next = np.clip(clear_next.astype(np.int16) + rng.integers(-2, 3, clear_next.shape), 0, 255).astype(np.uint8)
+    res_calm = assess_image_quality(clear_next, prev_bgr=clear_sky)
+    assert "repeated_identical_frame" not in res_calm.flags
 
     # Sudden camera movement detection (shift non-periodic landmark scene by 35px, 12px)
     scene = sky_img.copy()

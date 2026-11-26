@@ -213,10 +213,13 @@ def assess_image_quality(
             flags.append("ae_awb_jump")
             penalties += 0.16
 
-        frame_mad = float(
-            np.mean(np.abs(gray[m_small].astype(np.float32) - prev_gray[m_small].astype(np.float32))) / 255.0
-        )
-        if frame_mad < duplicate_threshold:
+        abs_diff = np.abs(gray[m_small].astype(np.float32) - prev_gray[m_small].astype(np.float32))
+        frame_mad = float(np.mean(abs_diff) / 255.0)
+        p99_diff = float(np.percentile(abs_diff, 99)) if abs_diff.size > 0 else 0.0
+        # A genuinely frozen/duplicated buffer has near-zero change even in the top 1% pixels;
+        # calm clear skies captured every 5-15s naturally have low global MAD (~0.001-0.008) due to smooth blue sky.
+        strict_mad_thresh = min(float(duplicate_threshold), 0.0015)
+        if (frame_mad < strict_mad_thresh and p99_diff <= 2.0) or (frame_mad <= 1e-6):
             flags.append("repeated_identical_frame")
 
         # Estimate global shift strictly inside eroded valid-sky mask using windowed 1st-order gradients
