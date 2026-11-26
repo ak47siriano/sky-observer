@@ -10,7 +10,7 @@ COPY frontend/ ./
 RUN npm run build
 
 # =============================================================================
-# Stage 2: Unified Runtime (FastAPI + PyTorch + OpenCV + Static Frontend)
+# Stage 2: Unified CPU-Slim Runtime (FastAPI + CPU PyTorch + OpenCV + Frontend)
 # =============================================================================
 FROM python:3.11-slim
 
@@ -30,8 +30,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /app
 
+# Install CPU-only PyTorch wheels first to avoid ~2 GB of unused CUDA libraries in default images
 COPY backend/requirements.txt /app/backend/requirements.txt
 RUN pip install --no-cache-dir --upgrade pip && \
+    pip install --no-cache-dir --index-url https://download.pytorch.org/whl/cpu torch torchvision && \
     pip install --no-cache-dir -r /app/backend/requirements.txt
 
 COPY backend /app/backend
@@ -48,6 +50,6 @@ USER skyobserver
 EXPOSE 8080
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
-    CMD curl -fsS http://127.0.0.1:8080/api/system/health || exit 1
+    CMD curl -fsS http://127.0.0.1:8080/api/health || exit 1
 
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8080", "--workers", "1"]
