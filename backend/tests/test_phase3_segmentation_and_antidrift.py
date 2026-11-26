@@ -142,3 +142,80 @@ def test_train_dinov3_probe_script_end_to_end(tmp_path: Path):
     assert report["trainable_params"] > 0
     # Verify saved JSON-serializable report
     assert json.dumps(report)
+
+
+def test_purge_models_preserves_default_baseline_models(isolated_env):
+    import pytest
+
+    from app.ai.registry import BASELINE_DEFAULT_MARKER, delete_model_by_id, is_default_baseline_model
+    from app.models_db import ModelRegistry
+    from app.services.storage import purge_storage_targets
+
+    cls_model, _ = build_model_for_family("classification", "CloudTypeClassifier-Fusion", pretrained=False)
+    seg_model, _ = build_model_for_family("segmentation", "CloudSegUNet-Mobile", pretrained=False)
+
+    default_cls_pt = isolated_env.models_dir / "classification_v1_0_0_default.pt"
+    custom_cls_pt = isolated_env.models_dir / "classification_v1_1_0_custom.pt"
+    default_seg_pt = isolated_env.models_dir / "segmentation_v1_0_0_default.pt"
+    torch.save({"model_state_dict": cls_model.state_dict()}, default_cls_pt)
+    torch.save({"model_state_dict": cls_model.state_dict()}, custom_cls_pt)
+    torch.save({"model_state_dict": seg_model.state_dict()}, default_seg_pt)
+
+    with get_db_session() as db:
+        default_cls = register_and_maybe_activate(
+            db=db,
+            model_id="classification-v1.0.0-default",
+            model_family="classification",
+            architecture="CloudTypeClassifier-Fusion",
+            version="v1.0.0",
+            weights_path=default_cls_pt,
+            metrics={"val_acc": 0.90},
+            activate=True,
+            notes=f"{BASELINE_DEFAULT_MARKER} Default baseline model",
+        )
+        assert is_default_baseline_model(default_cls)
+
+        default_seg = register_and_maybe_activate(
+            db=db,
+            model_id="segmentation-v1.0.0-default",
+            model_family="segmentation",
+            architecture="CloudSegUNet-Mobile",
+            version="v1.0.0",
+            weights_path=default_seg_pt,
+            metrics={"val_miou": 0.80},
+            activate=False,
+            notes=f"{BASELINE_DEFAULT_MARKER} Default baseline model",
+        )
+        assert is_default_baseline_model(default_seg)
+
+        # Register a newer custom trained model that supersedes the default classification model
+        custom_cls = register_and_maybe_activate(
+            db=db,
+            model_id="classification-v1.1.0-custom",
+            model_family="classification",
+            architecture="CloudTypeClassifier-Fusion",
+            version="v1.1.0",
+            weights_path=custom_cls_pt,
+            metrics={"val_acc": 0.94},
+            activate=True,
+            notes="Auto-trained on local sky observations",
+        )
+        assert not is_default_baseline_model(custom_cls)
+
+        # Deleting a standby default baseline model directly must be rejected
+        with pytest.raises(PermissionError):
+            delete_model_by_id(db, "segmentation-v1.0.0-default")
+
+        # Purging "models" must delete ONLY the custom trained model and preserve & re-activate defaults
+        summary = purge_storage_targets(db, isolated_env, targets=["models"])
+        assert summary["preserved_default_models"] == 2
+        assert not custom_cls_pt.exists()
+        assert default_cls_pt.exists()
+        assert default_seg_pt.exists()
+
+        remaining = {r.model_id: r for r in db.query(ModelRegistry).all()}
+        assert "classification-v1.1.0-custom" not in remaining
+        assert "classification-v1.0.0-default" in remaining
+        assert remaining["classification-v1.0.0-default"].is_active is True
+        assert "segmentation-v1.0.0-default" in remaining
+        assert remaining["segmentation-v1.0.0-default"].is_active is False

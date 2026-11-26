@@ -229,7 +229,7 @@ export const ModelLabPage: React.FC = () => {
     }
   };
 
-  const standbyCount = models.filter((m) => !m.is_active).length;
+  const standbyCount = models.filter((m) => !m.is_active && !m.is_default).length;
   const filteredModels =
     registryFilter === "all"
       ? models
@@ -1007,7 +1007,14 @@ export const ModelLabPage: React.FC = () => {
               })()}
               {filteredModels.map((m) => (
                 <tr key={m.model_id}>
-                  <td className="py-2 pr-3 font-mono text-white">{m.model_id}</td>
+                  <td className="py-2 pr-3 font-mono text-white">
+                    {m.model_id}
+                    {m.is_default && (
+                      <span className="ml-1.5 px-1.5 py-0.5 rounded bg-amber-500/15 border border-amber-400/30 text-amber-300 text-[9.5px]">
+                        DEFAULT
+                      </span>
+                    )}
+                  </td>
                   <td className="py-2 pr-3">{tEnum(m.model_family)}</td>
                   <td className="py-2 pr-3 text-[#C5CBD5]">{m.architecture}</td>
                   <td className="py-2 pr-3 font-mono tabular-nums text-[11px] text-[#9AA1AD]">
@@ -1034,14 +1041,16 @@ export const ModelLabPage: React.FC = () => {
                         >
                           {t("models.activate")}
                         </button>
-                        <button
-                          type="button"
-                          onClick={() => handleDeleteModel(m.model_id)}
-                          title={t("models.deleteOne")}
-                          className="inline-flex items-center gap-1 px-2 py-1 rounded-lg bg-rose-500/15 hover:bg-rose-500/30 border border-rose-500/30 text-rose-300 text-[11px] transition"
-                        >
-                          <Trash2 className="w-3 h-3" /> {t("models.deleteOne")}
-                        </button>
+                        {!m.is_default && (
+                          <button
+                            type="button"
+                            onClick={() => handleDeleteModel(m.model_id)}
+                            title={t("models.deleteOne")}
+                            className="inline-flex items-center gap-1 px-2 py-1 rounded-lg bg-rose-500/15 hover:bg-rose-500/30 border border-rose-500/30 text-rose-300 text-[11px] transition"
+                          >
+                            <Trash2 className="w-3 h-3" /> {t("models.deleteOne")}
+                          </button>
+                        )}
                       </div>
                     )}
                   </td>

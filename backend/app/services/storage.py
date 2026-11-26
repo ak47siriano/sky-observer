@@ -269,10 +269,51 @@ def purge_storage_targets(
         summary["deleted_datasets"] = int(del_ds + del_items + ds_files)
 
     if "models" in target_set:
-        del_reg = db.query(ModelRegistry).delete()
-        del_sess = db.query(TrainingSession).delete()
-        mod_files = _clear_directory_files(config.models_dir)
-        summary["deleted_models"] = int(del_reg + del_sess + mod_files)
+        from app.ai.registry import get_model_cache, is_default_baseline_model
+
+        all_models = db.query(ModelRegistry).order_by(ModelRegistry.created_at.asc(), ModelRegistry.id.asc()).all()
+        kept_models: list[ModelRegistry] = []
+        del_models: list[ModelRegistry] = []
+        for rec in all_models:
+            if is_default_baseline_model(rec):
+                kept_models.append(rec)
+            else:
+                del_models.append(rec)
+
+        kept_session_ids = {
+            int(r.training_session_id) for r in kept_models if r.training_session_id is not None
+        }
+        protected_model_paths: set[str] = set()
+        for r in kept_models:
+            if r.weights_path:
+                try:
+                    protected_model_paths.add(str(Path(r.weights_path).resolve()))
+                except Exception:
+                    pass
+
+        for r in del_models:
+            db.delete(r)
+        db.flush()
+
+        # Delete only training sessions belonging to removed non-default models
+        del_sess = 0
+        for s in db.query(TrainingSession).all():
+            if s.id not in kept_session_ids and s.status not in {"running", "queued"}:
+                db.delete(s)
+                del_sess += 1
+        db.flush()
+
+        # Re-activate preserved default baseline models for classification/temporal/event if active model was removed
+        for fam in ("classification", "temporal", "event"):
+            fam_kept = [r for r in kept_models if r.model_family == fam]
+            if fam_kept and not any(r.is_active for r in fam_kept):
+                fam_kept[0].is_active = True
+
+        mod_files = _clear_directory_files(config.models_dir, protected_model_paths)
+        db.commit()
+        get_model_cache().refresh_from_db(db)
+        summary["deleted_models"] = int(len(del_models) + del_sess + mod_files)
+        summary["preserved_default_models"] = len(kept_models)
 
     if "raw_images" in target_set or "observations" in target_set:
         summary["deleted_raw_files"] = _clear_directory_files(config.raw_images_dir, protected_paths)

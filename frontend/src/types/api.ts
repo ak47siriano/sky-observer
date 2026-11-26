@@ -111,6 +111,7 @@ export interface ModelEntry {
   metrics: Record<string, any>;
   confusion_matrix: { labels?: string[]; matrix?: number[][] };
   is_active: boolean;
+  is_default?: boolean;
   notes: string;
   created_at: string;
 }

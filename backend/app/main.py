@@ -698,6 +698,8 @@ def api_observation_image(
 
 @app.get("/api/models")
 def api_models_list(db: Session = Depends(get_db)) -> dict[str, Any]:
+    from app.ai.registry import is_default_baseline_model
+
     rows = db.query(ModelRegistry).order_by(ModelRegistry.created_at.desc(), ModelRegistry.id.desc()).all()
     return {
         "count": len(rows),
@@ -712,6 +714,7 @@ def api_models_list(db: Session = Depends(get_db)) -> dict[str, Any]:
                 "metrics": safe_json_loads(r.metrics_json, {}),
                 "confusion_matrix": safe_json_loads(r.confusion_matrix_json, {}),
                 "is_active": r.is_active,
+                "is_default": is_default_baseline_model(r),
                 "notes": r.notes,
                 "created_at": r.created_at.isoformat(),
             }

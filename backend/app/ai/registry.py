@@ -15,6 +15,19 @@ from app.ai.device import resolve_device, to_torch_device
 from app.config import get_config_manager
 from app.models_db import ModelRegistry, TrainingSession
 
+BASELINE_DEFAULT_MARKER = "[baseline-default]"
+
+
+def is_default_baseline_model(rec: ModelRegistry) -> bool:
+    """Return True if this checkpoint is a protected default/baseline model (never wiped by 'purge trained models')."""
+    notes_l = (rec.notes or "").lower()
+    mid_l = (rec.model_id or "").lower()
+    return (
+        BASELINE_DEFAULT_MARKER in notes_l
+        or mid_l.endswith("-default")
+        or "-baseline-" in mid_l
+    )
+
 
 class ActiveModelCache:
     """Thread-safe in-memory cache of active PyTorch models per model_family."""
@@ -189,12 +202,14 @@ def rollback_model_family(db: Session, model_family: str) -> ModelRegistry:
 
 
 def delete_model_by_id(db: Session, model_id: str, force: bool = False) -> dict[str, Any]:
-    """Delete a single registered model and its weights file on disk (refuses active model unless force=True)."""
+    """Delete a single registered model and its weights file on disk (protects active & default baseline models)."""
     target = db.query(ModelRegistry).filter(ModelRegistry.model_id == model_id).first()
     if not target:
         raise ValueError(f"Model {model_id} not found")
     if target.is_active and not force:
         raise PermissionError(f"Cannot delete active model '{model_id}'. Activate another model first.")
+    if is_default_baseline_model(target) and not force:
+        raise PermissionError(f"Cannot delete default baseline model '{model_id}'.")
 
     weights_path = target.weights_path
     sess_id = target.training_session_id
@@ -248,7 +263,11 @@ def prune_old_models(
             .order_by(ModelRegistry.is_active.desc(), ModelRegistry.created_at.desc(), ModelRegistry.id.desc())
             .all()
         )
-        to_remove = [r for i, r in enumerate(rows) if i >= keep_n and not r.is_active]
+        to_remove = [
+            r
+            for i, r in enumerate(rows)
+            if i >= keep_n and not r.is_active and not is_default_baseline_model(r)
+        ]
         for r in to_remove:
             wp_str = r.weights_path
             deleted_ids.append(r.model_id)
