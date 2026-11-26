@@ -653,3 +653,53 @@ def test_dataset_import_blocks_path_traversal(isolated_env):
         )
         assert r_abs.status_code == 200
         assert r_abs.json()["item_count"] == 1
+
+
+def test_phase1_ssrf_guard_credential_masking_and_health(isolated_env):
+    import pytest
+    from app.camera.manager import mask_url_credentials, validate_camera_source_url
+    from app.config import ServerConfig
+
+    # 1) SSRF guard blocks dangerous schemes, metadata IP, and private IPs on web_stream
+    with pytest.raises(ValueError):
+        validate_camera_source_url("file:///etc/passwd", source_type="web_stream")
+    with pytest.raises(ValueError):
+        validate_camera_source_url("http://169.254.169.254/latest/meta-data/", source_type="web_stream")
+    with pytest.raises(ValueError):
+        validate_camera_source_url("http://169.254.169.254/latest/meta-data/", source_type="http_snapshot")
+    with pytest.raises(ValueError):
+        validate_camera_source_url("http://127.0.0.1:8080/api/system/config", source_type="web_stream")
+    with pytest.raises(ValueError):
+        validate_camera_source_url("http://192.168.1.50:8080/shot.jpg", source_type="web_stream")
+
+    # Local LAN camera types allow private RFC1918 LAN IPs by default
+    assert validate_camera_source_url("http://192.168.1.50:8080/shot.jpg", source_type="http_snapshot").startswith("http://192.168.1.50")
+    assert validate_camera_source_url("rtsp://admin:pass@192.168.1.50:554/stream1", source_type="rtsp").startswith("rtsp://")
+
+    # 2) Credential masking hides embedded user:pass
+    assert mask_url_credentials("rtsp://admin:SuperSecret123@192.168.1.50:554/live") == "rtsp://***:***@192.168.1.50:554/live"
+
+    # 3) Wildcard CORS origin is rejected by ServerConfig
+    sc = ServerConfig(cors_origins=["*", "http://localhost:8080"])
+    assert "*" not in sc.cors_origins and "http://localhost:8080" in sc.cors_origins
+
+    # 4) API masks credentials in responses and preserves stored password on round-trip
+    with TestClient(app) as client:
+        assert client.get("/api/health").status_code == 200
+        r_put = client.put(
+            "/api/camera/config",
+            json={"source_type": "rtsp", "source_url": "rtsp://camuser:topsecret@192.168.1.99:554/live"},
+        )
+        assert r_put.status_code == 200
+        assert "topsecret" not in r_put.text
+        assert r_put.json()["source_url"] == "rtsp://***:***@192.168.1.99:554/live"
+
+        # Round-trip save with masked URL preserves original stored URL in config
+        r_roundtrip = client.put(
+            "/api/camera/config",
+            json={"name": "Renamed Cam", "source_url": "rtsp://***:***@192.168.1.99:554/live"},
+        )
+        assert r_roundtrip.status_code == 200
+        assert "topsecret" not in r_roundtrip.text
+        from app.config import get_config_manager
+        assert get_config_manager().get().camera.source_url == "rtsp://camuser:topsecret@192.168.1.99:554/live"

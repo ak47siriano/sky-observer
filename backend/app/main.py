@@ -37,7 +37,7 @@ from app.ai.registry import (
     rollback_model_family,
 )
 from app.ai.trainer import get_training_manager
-from app.camera.manager import get_camera_manager
+from app.camera.manager import get_camera_manager, mask_url_credentials
 from app.config import get_config_manager
 from app.database import get_db, get_db_session, init_database
 from app.forecast.engine import generate_forecasts_for_observation
@@ -220,6 +220,27 @@ def _encode_jpeg_response(img_bgr: np.ndarray, quality: int = 88) -> Response:
 # =====================================================================
 
 
+def _sanitize_camera_dump(cam_dump: dict[str, Any]) -> dict[str, Any]:
+    out = dict(cam_dump)
+    if isinstance(out.get("source_url"), str):
+        out["source_url"] = mask_url_credentials(out["source_url"])
+    if isinstance(out.get("secondary_cameras"), list):
+        sec_out = []
+        for sc in out["secondary_cameras"]:
+            sc_copy = dict(sc) if isinstance(sc, dict) else sc
+            if isinstance(sc_copy, dict) and isinstance(sc_copy.get("source_url"), str):
+                sc_copy["source_url"] = mask_url_credentials(sc_copy["source_url"])
+            sec_out.append(sc_copy)
+        out["secondary_cameras"] = sec_out
+    return out
+
+
+def _restore_masked_url(submitted_url: Any, existing_url: str) -> Any:
+    if isinstance(submitted_url, str) and existing_url and submitted_url == mask_url_credentials(existing_url):
+        return existing_url
+    return submitted_url
+
+
 @app.get("/api/camera/status")
 def api_camera_status() -> dict[str, Any]:
     return get_camera_manager().get_status()
@@ -227,17 +248,21 @@ def api_camera_status() -> dict[str, Any]:
 
 @app.get("/api/camera/config")
 def api_camera_config_get() -> dict[str, Any]:
-    return get_config_manager().get().camera.model_dump()
+    return _sanitize_camera_dump(get_config_manager().get().camera.model_dump())
 
 
 @app.put("/api/camera/config")
 def api_camera_config_put(payload: dict[str, Any]) -> dict[str, Any]:
+    current_cam = get_config_manager().get().camera
+    safe_payload = dict(payload)
+    if "source_url" in safe_payload:
+        safe_payload["source_url"] = _restore_masked_url(safe_payload["source_url"], current_cam.source_url)
     try:
-        updated = get_config_manager().replace_section("camera", payload)
+        updated = get_config_manager().replace_section("camera", safe_payload)
     except Exception as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
+        raise HTTPException(status_code=422, detail="Invalid camera configuration") from exc
     get_camera_manager().close()
-    return updated.camera.model_dump()
+    return _sanitize_camera_dump(updated.camera.model_dump())
 
 
 @app.put("/api/camera/masks")
@@ -968,6 +993,7 @@ def api_dataset_export(req: DatasetExportRequest, db: Session = Depends(get_db))
 # =====================================================================
 
 
+@app.get("/api/health")
 @app.get("/api/system/health")
 def api_system_health(db: Session = Depends(get_db)) -> dict[str, Any]:
     cfg = get_config_manager().get()
@@ -1670,20 +1696,36 @@ def _build_secondary_projections(cfg, alt_m: float, alt_src: str) -> list[dict[s
 @app.get("/api/cameras/secondary")
 def api_secondary_cameras_get() -> dict[str, Any]:
     cfg = get_config_manager().get()
+    cams = []
+    for c in cfg.camera.secondary_cameras:
+        d = c.model_dump()
+        d["source_url"] = mask_url_credentials(d.get("source_url", ""))
+        cams.append(d)
     return {
-        "cameras": [c.model_dump() for c in cfg.camera.secondary_cameras],
+        "cameras": cams,
         "cached_ids": list(_secondary_camera_masks.keys()),
     }
 
 
 @app.put("/api/cameras/secondary")
 def api_secondary_cameras_put(req: SecondaryCamerasUpdateRequest) -> dict[str, Any]:
-    updated = get_config_manager().update({"camera": {"secondary_cameras": [c.model_dump() for c in req.cameras]}})
+    existing_by_id = {c.id: c.source_url for c in get_config_manager().get().camera.secondary_cameras}
+    sec_payloads = []
+    for c in req.cameras:
+        d = c.model_dump()
+        d["source_url"] = _restore_masked_url(d.get("source_url", ""), existing_by_id.get(c.id, ""))
+        sec_payloads.append(d)
+    updated = get_config_manager().update({"camera": {"secondary_cameras": sec_payloads}})
     valid_ids = {c.id for c in updated.camera.secondary_cameras if c.enabled}
     for cid in list(_secondary_camera_masks.keys()):
         if cid not in valid_ids:
             _secondary_camera_masks.pop(cid, None)
-    return {"cameras": [c.model_dump() for c in updated.camera.secondary_cameras]}
+    out_cams = []
+    for c in updated.camera.secondary_cameras:
+        d = c.model_dump()
+        d["source_url"] = mask_url_credentials(d.get("source_url", ""))
+        out_cams.append(d)
+    return {"cameras": out_cams}
 
 
 @app.post("/api/cameras/secondary/{cam_id}/snapshot")
@@ -1899,16 +1941,28 @@ def api_weather_geocode(
 
 @app.get("/api/system/config")
 def api_system_config_get() -> dict[str, Any]:
-    return get_config_manager().get().model_dump()
+    dumped = get_config_manager().get().model_dump()
+    if isinstance(dumped.get("camera"), dict):
+        dumped["camera"] = _sanitize_camera_dump(dumped["camera"])
+    return dumped
 
 
 @app.put("/api/system/config")
 def api_system_config_put(payload: dict[str, Any]) -> dict[str, Any]:
+    current_cam = get_config_manager().get().camera
+    safe_payload = dict(payload)
+    if isinstance(safe_payload.get("camera"), dict) and "source_url" in safe_payload["camera"]:
+        cam_p = dict(safe_payload["camera"])
+        cam_p["source_url"] = _restore_masked_url(cam_p["source_url"], current_cam.source_url)
+        safe_payload["camera"] = cam_p
     try:
-        updated = get_config_manager().update(payload)
+        updated = get_config_manager().update(safe_payload)
     except Exception as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
-    return updated.model_dump()
+        raise HTTPException(status_code=422, detail="Invalid system configuration") from exc
+    dumped = updated.model_dump()
+    if isinstance(dumped.get("camera"), dict):
+        dumped["camera"] = _sanitize_camera_dump(dumped["camera"])
+    return dumped
 
 
 # =====================================================================

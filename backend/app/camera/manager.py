@@ -3,14 +3,16 @@
 from __future__ import annotations
 
 import ipaddress
+import os
 import re
+import socket
 import sys
 import time
 from dataclasses import dataclass
 from datetime import datetime, UTC
 from threading import RLock
 from typing import Any
-from urllib.parse import urlparse
+from urllib.parse import urljoin, urlparse, urlsplit, urlunsplit
 
 import cv2
 import httpx
@@ -18,6 +20,115 @@ import numpy as np
 
 from app.ai.datasets import _render_synthetic_sky_frame
 from app.config import CameraConfig, get_config_manager
+
+_URL_CREDS_RE = re.compile(r"([a-zA-Z][a-zA-Z0-9+.-]*://)([^/@\s]+)@")
+_ALLOWED_CAMERA_SCHEMES: dict[str, set[str]] = {
+    "http_snapshot": {"http", "https"},
+    "mjpeg_stream": {"http", "https"},
+    "web_stream": {"http", "https"},
+    "rtsp": {"rtsp", "rtsps", "http", "https"},
+}
+
+
+def mask_url_credentials(url: str) -> str:
+    """Replace embedded username:password@ in camera URLs with ***:***@ for safe API/log output."""
+    if not url or "@" not in url:
+        return url
+    try:
+        parts = urlsplit(url)
+        if parts.username is None and parts.password is None:
+            return url
+        host = parts.hostname or ""
+        if ":" in host and not host.startswith("["):
+            host = f"[{host}]"
+        port_part = f":{parts.port}" if parts.port is not None else ""
+        cred_part = "***:***@" if parts.password is not None else "***@"
+        return urlunsplit((parts.scheme, f"{cred_part}{host}{port_part}", parts.path, parts.query, parts.fragment))
+    except Exception:
+        return _URL_CREDS_RE.sub(r"\1***:***@", url)
+
+
+def sanitize_error_credentials(message: str) -> str:
+    """Strip any embedded URL credentials from arbitrary error strings."""
+    if not message:
+        return message
+    return _URL_CREDS_RE.sub(r"\1***:***@", str(message))
+
+
+def _resolve_allow_private_sources(source_type: str, explicit_override: bool | None = None) -> bool:
+    if explicit_override is not None:
+        return explicit_override
+    env_val = os.environ.get("SKYOBS_ALLOW_PRIVATE_SOURCES")
+    if env_val is not None and env_val.strip() != "":
+        return env_val.strip().lower() in {"1", "true", "yes"}
+    # Local LAN cameras are private by design; public web_stream defaults to public-only (SSRF protection)
+    return source_type in {"http_snapshot", "mjpeg_stream", "rtsp"}
+
+
+def _check_ip_allowed(ip_obj: ipaddress.IPv4Address | ipaddress.IPv6Address, allow_private: bool) -> None:
+    # Always block link-local / cloud metadata (169.254.169.254, fe80::), unspecified (0.0.0.0), multicast, reserved
+    if ip_obj.is_link_local or ip_obj.is_unspecified or ip_obj.is_multicast or ip_obj.is_reserved:
+        raise ValueError("URL points to a blocked link-local, metadata, or reserved IP address.")
+    if not allow_private and (ip_obj.is_private or ip_obj.is_loopback):
+        raise ValueError(
+            "Private or loopback addresses are blocked for this source type "
+            "(set SKYOBS_ALLOW_PRIVATE_SOURCES=true to opt in explicitly)."
+        )
+
+
+def validate_camera_source_url(
+    url: str,
+    source_type: str = "web_stream",
+    allow_private: bool | None = None,
+) -> str:
+    """
+    Validate camera/stream URL scheme and resolved IP addresses against SSRF.
+    Allows http/https/rtsp/rtsps only; resolves DNS and blocks link-local/metadata (169.254.169.254)
+    unconditionally, plus private/loopback IPs on web_stream unless SKYOBS_ALLOW_PRIVATE_SOURCES=true.
+    """
+    clean_url = (url or "").strip()
+    if not clean_url:
+        raise ValueError("Camera source_url is empty.")
+
+    parts = urlsplit(clean_url)
+    scheme = (parts.scheme or "").lower()
+    allowed_schemes = _ALLOWED_CAMERA_SCHEMES.get(source_type, {"http", "https", "rtsp", "rtsps"})
+    if scheme not in allowed_schemes:
+        raise ValueError(f"Unsupported URL scheme '{scheme or 'none'}' for source type '{source_type}'.")
+
+    host = (parts.hostname or "").strip().lower()
+    if not host:
+        raise ValueError("Camera source_url is missing a valid hostname.")
+
+    allow_priv = _resolve_allow_private_sources(source_type, allow_private)
+    if not allow_priv and host in {"localhost", "localhost.localdomain"}:
+        raise ValueError("Loopback host 'localhost' is blocked for web_stream sources.")
+
+    try:
+        ip_direct = ipaddress.ip_address(host)
+    except ValueError:
+        ip_direct = None
+
+    if ip_direct is not None:
+        _check_ip_allowed(ip_direct, allow_priv)
+        return clean_url
+
+    try:
+        infos = socket.getaddrinfo(host, parts.port or (443 if scheme in {"https", "rtsps"} else 80), type=socket.SOCK_STREAM)
+    except socket.gaierror as exc:
+        raise ValueError(f"Unable to resolve camera host '{host}'") from exc
+
+    resolved_ips: set[str] = set()
+    for info in infos:
+        sockaddr = info[4]
+        if sockaddr and sockaddr[0]:
+            resolved_ips.add(str(sockaddr[0]).split("%", 1)[0])
+    if not resolved_ips:
+        raise ValueError(f"No IP addresses resolved for host '{host}'")
+
+    for ip_str in resolved_ips:
+        _check_ip_allowed(ipaddress.ip_address(ip_str), allow_priv)
+    return clean_url
 
 
 @dataclass
@@ -55,14 +166,14 @@ class CameraManager:
             return {
                 "connected": self._connected,
                 "source_type": cfg.source_type,
-                "source_url": cfg.source_url,
+                "source_url": mask_url_credentials(cfg.source_url),
                 "device_index": cfg.device_index,
                 "camera_name": cfg.name,
                 "location_description": cfg.location_description,
                 "is_demo_mode": cfg.source_type == "demo_simulation",
                 "last_capture_at": self._last_capture_at.isoformat() if self._last_capture_at else None,
                 "last_latency_ms": round(self._last_latency_ms, 2),
-                "last_error": self._last_error,
+                "last_error": sanitize_error_credentials(self._last_error),
                 "consecutive_failures": self._consecutive_failures,
                 "reconnect_attempts": self._reconnect_attempts,
             }
@@ -89,20 +200,31 @@ class CameraManager:
         img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
         return img
 
-    def _capture_http_snapshot(self, url: str, timeout: float) -> np.ndarray:
+    def _safe_http_get(self, url: str, timeout: float, source_type: str, headers: dict[str, str] | None = None) -> httpx.Response:
+        current_url = validate_camera_source_url(url, source_type=source_type)
+        with httpx.Client(timeout=timeout, follow_redirects=False, headers=headers) as client:
+            for _ in range(4):
+                resp = client.get(current_url)
+                if resp.status_code in {301, 302, 303, 307, 308} and resp.headers.get("location"):
+                    next_url = urljoin(current_url, resp.headers["location"])
+                    current_url = validate_camera_source_url(next_url, source_type=source_type)
+                    continue
+                resp.raise_for_status()
+                return resp
+        raise ConnectionError("Too many HTTP redirects while fetching camera frame.")
+
+    def _capture_http_snapshot(self, url: str, timeout: float, source_type: str = "http_snapshot") -> np.ndarray:
         if not url:
             raise ValueError("Camera source_url is empty. Configure your Android IP Webcam URL (e.g., http://192.168.1.50:8080/shot.jpg).")
-        with httpx.Client(timeout=timeout, follow_redirects=True) as client:
-            resp = client.get(url)
-            resp.raise_for_status()
-            ctype = resp.headers.get("content-type", "").lower()
-            if "multipart" in ctype or "x-mixed-replace" in ctype or b"--" in resp.content[:64]:
-                img = self._extract_first_mjpeg_frame(resp.content)
-            else:
-                img = self._decode_jpeg_bytes(resp.content)
-            if img is None:
-                raise ValueError("Failed to decode JPEG image from HTTP camera response")
-            return img
+        resp = self._safe_http_get(url, timeout=timeout, source_type=source_type)
+        ctype = resp.headers.get("content-type", "").lower()
+        if "multipart" in ctype or "x-mixed-replace" in ctype or b"--" in resp.content[:64]:
+            img = self._extract_first_mjpeg_frame(resp.content)
+        else:
+            img = self._decode_jpeg_bytes(resp.content)
+        if img is None:
+            raise ValueError("Failed to decode JPEG image from HTTP camera response")
+        return img
 
     def _extract_first_mjpeg_frame(self, raw: bytes) -> np.ndarray | None:
         start = raw.find(b"\xff\xd8")
@@ -114,8 +236,9 @@ class CameraManager:
     def _capture_mjpeg_stream(self, url: str, timeout: float) -> np.ndarray:
         if not url:
             raise ValueError("MJPEG stream source_url is empty.")
-        with httpx.Client(timeout=timeout, follow_redirects=True) as client:
-            with client.stream("GET", url) as resp:
+        safe_url = validate_camera_source_url(url, source_type="mjpeg_stream")
+        with httpx.Client(timeout=timeout, follow_redirects=False) as client:
+            with client.stream("GET", safe_url) as resp:
                 resp.raise_for_status()
                 buf = bytearray()
                 t_start = time.perf_counter()
@@ -138,11 +261,12 @@ class CameraManager:
         with self._lock:
             if self._rtsp_cap is None or self._rtsp_url != url or not self._rtsp_cap.isOpened():
                 self.close()
-                cap = cv2.VideoCapture(url, cv2.CAP_FFMPEG)
+                safe_rtsp = validate_camera_source_url(url, source_type="rtsp")
+                cap = cv2.VideoCapture(safe_rtsp, cv2.CAP_FFMPEG)
                 cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
                 if not cap.isOpened():
                     cap.release()
-                    raise ConnectionError(f"Unable to open RTSP stream: {url}")
+                    raise ConnectionError(f"Unable to open RTSP stream: {mask_url_credentials(url)}")
                 self._rtsp_cap = cap
                 self._rtsp_url = url
 
@@ -171,9 +295,7 @@ class CameraManager:
         Resolve a public webcam page URL (e.g., SkylineWebcams) or direct HLS (.m3u8) URL
         into (hls_stream_url, fallback_snapshot_jpeg_url). Caches page resolution for 180s.
         """
-        clean_url = url.strip()
-        if not clean_url:
-            raise ValueError("Web stream source_url is empty.")
+        clean_url = validate_camera_source_url(url, source_type="web_stream")
 
         if ".m3u8" in clean_url.lower():
             return clean_url, None
@@ -183,18 +305,17 @@ class CameraManager:
         if cached and (now - cached[0]) < 180.0:
             return cached[1], cached[2]
 
-        with httpx.Client(
+        resp = self._safe_http_get(
+            clean_url,
             timeout=timeout,
-            follow_redirects=True,
+            source_type="web_stream",
             headers={"User-Agent": "SkyObserver/1.0"},
-        ) as client:
-            resp = client.get(clean_url)
-            resp.raise_for_status()
-            ctype = resp.headers.get("content-type", "").lower()
-            if ctype.startswith("image/"):
-                self._web_stream_cache[clean_url] = (now, None, clean_url)
-                return None, clean_url
-            html = resp.text
+        )
+        ctype = resp.headers.get("content-type", "").lower()
+        if ctype.startswith("image/"):
+            self._web_stream_cache[clean_url] = (now, None, clean_url)
+            return None, clean_url
+        html = resp.text
 
         hls_url: str | None = None
         # 1) Direct absolute .m3u8 URL embedded in page HTML
@@ -214,6 +335,11 @@ class CameraManager:
 
         if not hls_url and not snap_url:
             raise ValueError("Could not find a public HLS (.m3u8) stream or live JPEG snapshot on this web page.")
+
+        if hls_url:
+            hls_url = validate_camera_source_url(hls_url, source_type="web_stream")
+        if snap_url:
+            snap_url = validate_camera_source_url(snap_url, source_type="web_stream")
 
         self._web_stream_cache[clean_url] = (now, hls_url, snap_url)
         return hls_url, snap_url
@@ -247,9 +373,9 @@ class CameraManager:
             self._web_stream_cache.pop(url.strip(), None)
 
         if snap_url:
-            return self._capture_http_snapshot(snap_url, timeout)
+            return self._capture_http_snapshot(snap_url, timeout, source_type="web_stream")
 
-        raise ConnectionError(f"Unable to read live frame from web stream: {url}")
+        raise ConnectionError(f"Unable to read live frame from web stream: {mask_url_credentials(url)}")
 
     def _open_device_capture(self, device_index: int) -> cv2.VideoCapture:
         backends = [cv2.CAP_DSHOW, cv2.CAP_ANY] if sys.platform == "win32" else [cv2.CAP_V4L2, cv2.CAP_ANY]
@@ -400,9 +526,10 @@ class CameraManager:
             )
         except Exception as exc:
             latency_ms = (time.perf_counter() - t0) * 1000.0
+            safe_err = sanitize_error_credentials(str(exc))
             with self._lock:
                 self._connected = False
-                self._last_error = str(exc)
+                self._last_error = safe_err
                 self._last_latency_ms = latency_ms
                 self._consecutive_failures += 1
                 if cfg.reconnect_enabled:
@@ -416,7 +543,7 @@ class CameraManager:
                 captured_at=datetime.now(UTC),
                 latency_ms=latency_ms,
                 source_type=cfg.source_type,
-                error=str(exc),
+                error=safe_err,
             )
 
     def test_connection(

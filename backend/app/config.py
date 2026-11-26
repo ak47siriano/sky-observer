@@ -48,6 +48,12 @@ class ServerConfig(BaseModel):
         ]
     )
 
+    @field_validator("cors_origins")
+    @classmethod
+    def forbid_wildcard_origin(cls, origins: list[str]) -> list[str]:
+        cleaned = [o.strip() for o in origins if o and o.strip() and o.strip() != "*"]
+        return cleaned or ["http://localhost:8080", "http://127.0.0.1:8080"]
+
 
 class SecondaryCameraConfig(BaseModel):
     """Additional camera pointing in a complementary direction (e.g., North + South) for 360-degree Radar Fusion."""
@@ -302,6 +308,19 @@ class ConfigManager:
                 if isinstance(loaded, dict):
                     raw = loaded
         cfg = AppConfig.model_validate(raw)
+        host_env = os.environ.get("SKYOBS_HOST") or os.environ.get("SKYOBSERVER_HOST")
+        if host_env and host_env.strip():
+            cfg.server.host = host_env.strip()
+        port_env = os.environ.get("SKYOBS_PORT") or os.environ.get("SKYOBSERVER_PORT")
+        if port_env and port_env.strip().isdigit():
+            p_int = int(port_env.strip())
+            if 1 <= p_int <= 65535:
+                cfg.server.port = p_int
+        cors_env = os.environ.get("SKYOBS_CORS_ORIGINS") or os.environ.get("SKYOBSERVER_CORS_ORIGINS")
+        if cors_env:
+            parsed_origins = [x.strip() for x in cors_env.split(",") if x.strip() and x.strip() != "*"]
+            if parsed_origins:
+                cfg.server.cors_origins = parsed_origins
         if os.environ.get("SKYOBSERVER_OFFLINE_MODE"):
             cfg.server.offline_mode = os.environ["SKYOBSERVER_OFFLINE_MODE"].lower() in {"1", "true", "yes"}
         if os.environ.get("SKYOBSERVER_DEVICE"):
