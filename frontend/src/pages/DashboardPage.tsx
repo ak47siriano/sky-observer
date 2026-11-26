@@ -438,9 +438,21 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({
               <>
                 <div className="flex items-baseline justify-between obs-inset p-3">
                   <div>
-                    <div className="text-sm font-semibold text-white">{tEnum(selectedForecast.forecast)}</div>
+                    <div className="flex items-center gap-1.5 flex-wrap">
+                      <span className="text-sm font-semibold text-white">{tEnum(selectedForecast.forecast)}</span>
+                      {selectedForecast.low_reliability && (
+                        <span className="px-1.5 py-0.5 rounded bg-amber-500/15 border border-amber-500/30 text-amber-300 text-[9px] font-mono">
+                          {t("forecast.lowReliability")}
+                        </span>
+                      )}
+                    </div>
                     <div className="text-[11px] font-mono tabular-nums text-[#8E95A2] mt-0.5">
                       {t("overview.forecastConfidence")} {(selectedForecast.confidence * 100).toFixed(0)}%
+                      {selectedForecast.cover_p10 != null && selectedForecast.cover_p90 != null && (
+                        <span className="ml-2 text-[#9AA1AD]">
+                          [{selectedForecast.cover_p10.toFixed(0)}–{selectedForecast.cover_p90.toFixed(0)}%]
+                        </span>
+                      )}
                     </div>
                   </div>
                   <div className="text-right">

@@ -75,7 +75,9 @@ class Forecast(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     generated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
-    observation_id: Mapped[int | None] = mapped_column(ForeignKey("observations.id", ondelete="SET NULL"), nullable=True)
+    observation_id: Mapped[int | None] = mapped_column(
+        ForeignKey("observations.id", ondelete="SET NULL"), nullable=True
+    )
     horizon_minutes: Mapped[int] = mapped_column(Integer, index=True)
     target_time: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
 
@@ -93,6 +95,7 @@ class Forecast(Base):
     signals_json: Mapped[str] = mapped_column(Text, default="[]")
     reasons_json: Mapped[str] = mapped_column(Text, default="[]")
     limitations_json: Mapped[str] = mapped_column(Text, default="[]")
+    baseline_metrics_json: Mapped[str] = mapped_column(Text, default="{}")
     model_version: Mapped[str] = mapped_column(String(64), default="rules-v1.0.0")
     verified: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
 
@@ -109,6 +112,8 @@ class ForecastVerification(Base):
     actual_cover: Mapped[float] = mapped_column(Float)
     abs_error: Mapped[float] = mapped_column(Float)
     sq_error: Mapped[float] = mapped_column(Float)
+    persistence_abs_error: Mapped[float | None] = mapped_column(Float, nullable=True)
+    optical_flow_abs_error: Mapped[float | None] = mapped_column(Float, nullable=True)
     predicted_condition: Mapped[str] = mapped_column(String(64))
     actual_condition: Mapped[str] = mapped_column(String(64))
     condition_correct: Mapped[bool] = mapped_column(Boolean)
@@ -126,7 +131,9 @@ class EventAlert(Base):
     severity: Mapped[str] = mapped_column(String(16), default="info")
     title: Mapped[str] = mapped_column(String(128))
     description: Mapped[str] = mapped_column(Text, default="")
-    observation_id: Mapped[int | None] = mapped_column(ForeignKey("observations.id", ondelete="SET NULL"), nullable=True)
+    observation_id: Mapped[int | None] = mapped_column(
+        ForeignKey("observations.id", ondelete="SET NULL"), nullable=True
+    )
     metrics_json: Mapped[str] = mapped_column(Text, default="{}")
     acknowledged: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
     user_status: Mapped[str] = mapped_column(String(24), default="pending", index=True)
@@ -155,7 +162,9 @@ class DatasetItem(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     dataset_id: Mapped[int] = mapped_column(ForeignKey("datasets.id", ondelete="CASCADE"), index=True)
-    observation_id: Mapped[int | None] = mapped_column(ForeignKey("observations.id", ondelete="SET NULL"), nullable=True)
+    observation_id: Mapped[int | None] = mapped_column(
+        ForeignKey("observations.id", ondelete="SET NULL"), nullable=True
+    )
     split: Mapped[str] = mapped_column(String(16), default="train", index=True)
     group_key: Mapped[str] = mapped_column(String(64), default="default", index=True)
     sequence_index: Mapped[int] = mapped_column(Integer, default=0)

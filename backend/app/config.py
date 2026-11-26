@@ -61,7 +61,9 @@ class SecondaryCameraConfig(BaseModel):
     id: str = "cam_2"
     name: str = "Secondary Sky Cam"
     enabled: bool = True
-    source_type: Literal["http_snapshot", "mjpeg_stream", "rtsp", "web_stream", "webcam_device", "demo_simulation"] = "http_snapshot"
+    source_type: Literal[
+        "http_snapshot", "mjpeg_stream", "rtsp", "web_stream", "webcam_device", "demo_simulation"
+    ] = "http_snapshot"
     source_url: str = ""
     device_index: int = Field(default=1, ge=0, le=16)
     orientation_azimuth_deg: float = Field(default=0.0, ge=0.0, le=360.0)
@@ -142,6 +144,8 @@ class ForecastConfig(BaseModel):
     update_interval_seconds: float = Field(default=60.0, ge=5.0, le=3600.0)
     rain_prediction_enabled: bool = True
     experimental_predictions: bool = True
+    ensemble_members: int = Field(default=5, ge=1, le=15)
+    advection_resolution: int = Field(default=96, ge=48, le=256)
     rules: ForecastRulesConfig = Field(default_factory=ForecastRulesConfig)
 
 

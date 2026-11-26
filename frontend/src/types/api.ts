@@ -79,6 +79,10 @@ export interface ForecastItem {
   signals: string[];
   reasons: string[];
   limitations: string[];
+  baselines?: Record<string, any>;
+  low_reliability?: boolean;
+  cover_p10?: number | null;
+  cover_p90?: number | null;
   model_version: string;
   verified: boolean;
 }

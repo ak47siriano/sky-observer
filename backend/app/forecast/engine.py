@@ -4,16 +4,21 @@ from __future__ import annotations
 
 import json
 from datetime import datetime, timedelta, UTC
+from pathlib import Path
 from typing import Any
 
+import cv2
 import numpy as np
 import torch
 from sqlalchemy.orm import Session
 
 from app.ai.registry import get_model_cache
 from app.config import AppConfig
+from app.forecast.advection import advect_cloud_mask_optical_flow, persistence_baseline_cover
+from app.forecast.verification import compute_verification_summary
 from app.models_db import Forecast, Observation, safe_json_loads
 from app.services.weather_online import get_online_weather_service
+from app.vision.masking import build_valid_sky_mask_from_config
 
 
 def _classify_cover_condition(cover_pct: float, dark_pct: float, storm_prob: float) -> str:
@@ -169,7 +174,8 @@ def generate_forecasts_for_observation(
     if latest_obs.motion_consistency >= rules.high_motion_consistency and latest_obs.motion_speed_px_s > 0.5:
         signals.append("cloud_movement_consistent")
         reasons.append(
-            f"Consistent cloud advection toward {latest_obs.motion_direction_cardinal} ({latest_obs.motion_speed_px_s:.1f} px/s)."
+            f"Consistent cloud advection toward {latest_obs.motion_direction_cardinal} "
+            f"({latest_obs.motion_speed_px_s:.1f} px/s)."
         )
     if float(tex_curr.get("fragmentation_index", 0.0)) > 0.40:
         signals.append("sky_fragmented_cellular")
@@ -214,6 +220,22 @@ def generate_forecasts_for_observation(
                 "regional_nwp_resolution_approx_2_to_11km",
             ]
 
+    # Load latest segmentation mask & optical-flow vector for pixel-level advection baseline + ensemble
+    seg_mask: np.ndarray | None = None
+    valid_mask_adv: np.ndarray | None = None
+    motion_meta = safe_json_loads(latest_obs.motion_metrics_json, {})
+    dx_px_s = float(motion_meta.get("dx_px_s", 0.0) or 0.0)
+    dy_px_s = float(motion_meta.get("dy_px_s", 0.0) or 0.0)
+    if latest_obs.seg_mask_path and Path(latest_obs.seg_mask_path).exists():
+        loaded_mask = cv2.imread(latest_obs.seg_mask_path, cv2.IMREAD_GRAYSCALE)
+        if loaded_mask is not None and loaded_mask.size > 0:
+            seg_mask = loaded_mask
+            valid_mask_adv = build_valid_sky_mask_from_config(loaded_mask.shape[:2], config.camera)
+
+    # Check historical measured skill per horizon so horizons failing to beat persistence are honestly flagged
+    hist_ver = compute_verification_summary(db)
+    hist_by_horizon = hist_ver.get("by_horizon", {}) if isinstance(hist_ver, dict) else {}
+
     created_forecasts: list[Forecast] = []
     # Camera-only FOV is physically limited to +5/+15/+20 min; +30/+60 min only when external NWP data is fused
     if online_data is not None:
@@ -221,9 +243,37 @@ def generate_forecasts_for_observation(
     else:
         horizons = [h for h in (config.forecast.horizons_minutes or [5, 15, 20]) if h <= 20] or [5, 15, 20]
     for idx, h_min in enumerate(horizons):
+        # Baseline 1: Persistence
+        pers_cov = persistence_baseline_cover(cov_curr)
+
+        # Baseline 2: Optical-Flow pixel mask advection + probabilistic ensemble
+        adv_res = (
+            advect_cloud_mask_optical_flow(
+                seg_mask=seg_mask,
+                dx_px_s=dx_px_s,
+                dy_px_s=dy_px_s,
+                horizon_minutes=float(h_min),
+                orig_width=latest_obs.width or None,
+                orig_height=latest_obs.height or None,
+                valid_mask=valid_mask_adv,
+                resolution=int(getattr(config.forecast, "advection_resolution", 96)),
+                ensemble_members=int(getattr(config.forecast, "ensemble_members", 5)),
+                motion_consistency=float(latest_obs.motion_consistency or 0.5),
+            )
+            if seg_mask is not None
+            else {"available": False}
+        )
+        of_cov = adv_res.get("advected_cover_pct") if adv_res.get("available") else None
+        fov_exit = float(adv_res.get("fov_exit_fraction", 0.0)) if adv_res.get("available") else 0.0
+
         # Rule-based damped linear projection
         damp = {5: 4.5, 15: 10.5, 20: 13.0, 30: 15.0, 60: 20.0}.get(h_min, min(22.0, h_min * 0.45))
         rule_proj_cov = float(np.clip(cov_curr + rate_per_min * damp, 0.0, 100.0))
+
+        # Blend optical-flow mask advection into local camera forecast when motion is consistent
+        if of_cov is not None and float(latest_obs.motion_consistency or 0.0) >= 0.40:
+            of_w = float(np.clip(float(latest_obs.motion_consistency) * 0.55 * (1.0 - 0.5 * fov_exit), 0.15, 0.50))
+            rule_proj_cov = float(np.clip((1.0 - of_w) * rule_proj_cov + of_w * float(of_cov), 0.0, 100.0))
 
         # Blend with TemporalSkyConvGRU if available
         if nn_horizon_preds is not None and idx < nn_horizon_preds.shape[0]:
@@ -281,7 +331,7 @@ def generate_forecasts_for_observation(
             if config.forecast.rain_prediction_enabled:
                 precip_prob = round(0.70 * precip_prob + 0.30 * float(nn_probs[4]), 3)
 
-        # Confidence decays gracefully with forecast horizon and low quality/history
+        # Confidence decays gracefully with forecast horizon, FOV transit, and historical skill vs persistence
         hist_factor = min(1.0, len(recent_obs) / 5.0)
         horizon_decay = max(0.32, 1.0 - (h_min / 95.0))
         online_boost = 0.08 if online_data is not None else 0.0
@@ -298,6 +348,24 @@ def generate_forecasts_for_observation(
             * horizon_decay
         )
 
+        # Honest reliability assessment vs persistence & narrow camera FOV limits
+        h_stat = hist_by_horizon.get(str(h_min), {})
+        h_count = int(h_stat.get("count", 0) or 0)
+        h_skill = h_stat.get("skill_vs_persistence")
+        low_reliability = False
+        reliability_reasons: list[str] = []
+        if h_count >= 3 and h_skill is not None and float(h_skill) <= 0.0:
+            low_reliability = True
+            reliability_reasons.append(f"skill_vs_persistence={h_skill:+.2f}_does_not_beat_persistence")
+            conf = min(conf, 0.42)
+        if h_min >= 30 and (h_skill is None or float(h_skill) <= 0.0):
+            low_reliability = True
+            reliability_reasons.append("long_horizon_low_camera_visibility")
+        if adv_res.get("available") and fov_exit >= 0.70:
+            low_reliability = True
+            reliability_reasons.append(f"narrow_fov_cloud_transit_{int(fov_exit * 100)}pct")
+            conf = min(conf, 0.48)
+
         if delta_cov >= 10.0:
             cond = "increasing_cloudiness"
         elif delta_cov <= -10.0:
@@ -308,6 +376,26 @@ def generate_forecasts_for_observation(
         fc_limitations = list(limitations)
         if config.forecast.experimental_predictions and online_data is None:
             fc_limitations.append("precip_and_storm_signals_are_experimental_visual_indicators_only")
+        if low_reliability:
+            fc_limitations.append("low_reliability_horizon")
+
+        # Probabilistic interval centered around projected coverage using advection ensemble spread
+        ens_band = float(adv_res.get("uncertainty_band_pct") or round(4.0 + h_min * 0.42, 1))
+        cover_p10 = round(float(np.clip(proj_cov - ens_band, 0.0, 100.0)), 1)
+        cover_p90 = round(float(np.clip(proj_cov + ens_band, 0.0, 100.0)), 1)
+
+        baseline_payload = {
+            "persistence_cover_pct": pers_cov,
+            "optical_flow_cover_pct": of_cov,
+            "cover_p10": cover_p10,
+            "cover_p50": round(proj_cov, 1),
+            "cover_p90": cover_p90,
+            "uncertainty_band_pct": round(ens_band, 1),
+            "fov_exit_fraction": round(fov_exit, 3),
+            "historical_skill_vs_persistence": h_skill,
+            "low_reliability": low_reliability,
+            "reliability_reasons": reliability_reasons,
+        }
 
         fc = Forecast(
             generated_at=gen_time,
@@ -327,6 +415,7 @@ def generate_forecasts_for_observation(
             signals_json=json.dumps(signals),
             reasons_json=json.dumps(reasons),
             limitations_json=json.dumps(fc_limitations),
+            baseline_metrics_json=json.dumps(baseline_payload),
             model_version=model_version,
             verified=False,
         )

@@ -9,7 +9,8 @@ import numpy as np
 from sklearn.metrics import accuracy_score, confusion_matrix, f1_score, precision_score, recall_score
 from sqlalchemy.orm import Session
 
-from app.models_db import Forecast, ForecastVerification, Observation
+from app.forecast.advection import compute_forecast_skill
+from app.models_db import Forecast, ForecastVerification, Observation, safe_json_loads
 
 
 def _coarse_sky_category(cover_pct: float) -> str:
@@ -75,6 +76,18 @@ def verify_due_forecasts(db: Session, observation: Observation, tolerance_minute
         cond_ok = pred_cat == actual_cat
         brier = (float(fc.overcast_prob) - actual_overcast) ** 2
 
+        # Compute Persistence & Optical-Flow baseline errors for honest skill scoring
+        b_meta = safe_json_loads(getattr(fc, "baseline_metrics_json", None), {})
+        pers_cover = b_meta.get("persistence_cover_pct")
+        if pers_cover is None and fc.observation_id is not None:
+            orig_obs = db.query(Observation).filter(Observation.id == fc.observation_id).first()
+            if orig_obs is not None:
+                pers_cover = float(orig_obs.cloud_coverage_pct)
+        pers_err = round(abs(float(pers_cover) - actual_cover), 3) if pers_cover is not None else None
+
+        of_cover = b_meta.get("optical_flow_cover_pct")
+        of_err = round(abs(float(of_cover) - actual_cover), 3) if of_cover is not None else None
+
         ver = ForecastVerification(
             forecast_id=fc.id,
             observation_id=observation.id,
@@ -84,6 +97,8 @@ def verify_due_forecasts(db: Session, observation: Observation, tolerance_minute
             actual_cover=actual_cover,
             abs_error=round(abs_err, 3),
             sq_error=round(sq_err, 3),
+            persistence_abs_error=pers_err,
+            optical_flow_abs_error=of_err,
             predicted_condition=pred_cat,
             actual_condition=actual_cat,
             condition_correct=cond_ok,
@@ -128,9 +143,26 @@ def compute_verification_summary(db: Session, model_version: str | None = None) 
     y_pred = [r.predicted_condition for r in rows]
     labels = sorted(set(y_true) | set(y_pred))
 
+    pers_errs_all = [float(r.persistence_abs_error) for r in rows if r.persistence_abs_error is not None]
+    of_errs_all = [float(r.optical_flow_abs_error) for r in rows if r.optical_flow_abs_error is not None]
+    overall_mae = round(float(np.mean(abs_errs)), 2)
+    pers_mae_all = round(float(np.mean(pers_errs_all)), 2) if pers_errs_all else None
+    of_mae_all = round(float(np.mean(of_errs_all)), 2) if of_errs_all else None
+    overall_skill = compute_forecast_skill(overall_mae, pers_mae_all) if pers_mae_all is not None else None
+    of_skill_all = (
+        compute_forecast_skill(of_mae_all, pers_mae_all)
+        if (of_mae_all is not None and pers_mae_all is not None)
+        else None
+    )
+
     overall = {
-        "mae_pct": round(float(np.mean(abs_errs)), 2),
+        "mae_pct": overall_mae,
         "rmse_pct": round(float(np.sqrt(np.mean(sq_errs))), 2),
+        "persistence_mae_pct": pers_mae_all,
+        "optical_flow_mae_pct": of_mae_all,
+        "skill_vs_persistence": overall_skill,
+        "optical_flow_skill_vs_persistence": of_skill_all,
+        "beats_persistence": (overall_skill is not None and overall_skill > 0.0),
         "accuracy": round(float(accuracy_score(y_true, y_pred)), 4),
         "precision": round(float(precision_score(y_true, y_pred, average="macro", zero_division=0)), 4),
         "recall": round(float(recall_score(y_true, y_pred, average="macro", zero_division=0)), 4),
@@ -145,10 +177,20 @@ def compute_verification_summary(db: Session, model_version: str | None = None) 
         sub = [r for r in rows if r.horizon_minutes == h]
         h_true = [r.actual_condition for r in sub]
         h_pred = [r.predicted_condition for r in sub]
+        h_mae = round(float(np.mean([r.abs_error for r in sub])), 2)
+        h_pers_list = [float(r.persistence_abs_error) for r in sub if r.persistence_abs_error is not None]
+        h_of_list = [float(r.optical_flow_abs_error) for r in sub if r.optical_flow_abs_error is not None]
+        h_pers_mae = round(float(np.mean(h_pers_list)), 2) if h_pers_list else None
+        h_of_mae = round(float(np.mean(h_of_list)), 2) if h_of_list else None
+        h_skill = compute_forecast_skill(h_mae, h_pers_mae) if h_pers_mae is not None else None
         by_horizon[str(h)] = {
             "count": len(sub),
-            "mae_pct": round(float(np.mean([r.abs_error for r in sub])), 2),
+            "mae_pct": h_mae,
             "rmse_pct": round(float(np.sqrt(np.mean([r.sq_error for r in sub]))), 2),
+            "persistence_mae_pct": h_pers_mae,
+            "optical_flow_mae_pct": h_of_mae,
+            "skill_vs_persistence": h_skill,
+            "beats_persistence": (h_skill is not None and h_skill > 0.0),
             "accuracy": round(float(accuracy_score(h_true, h_pred)), 4),
             "brier_score": round(float(np.mean([r.brier_score for r in sub])), 4),
         }
@@ -195,15 +237,24 @@ def compute_verification_summary(db: Session, model_version: str | None = None) 
     trend_rows = rows[-120:]
     mae_trend: list[dict[str, Any]] = []
     window_errs: list[float] = []
+    window_pers: list[float] = []
     for r in trend_rows:
         window_errs.append(float(r.abs_error))
         if len(window_errs) > 10:
             window_errs.pop(0)
+        if r.persistence_abs_error is not None:
+            window_pers.append(float(r.persistence_abs_error))
+            if len(window_pers) > 10:
+                window_pers.pop(0)
+        r_mae = round(float(np.mean(window_errs)), 2)
+        r_pers = round(float(np.mean(window_pers)), 2) if window_pers else None
         mae_trend.append({
             "verified_at": r.verified_at.isoformat(),
             "horizon_minutes": r.horizon_minutes,
             "abs_error": round(float(r.abs_error), 2),
-            "rolling_mae_pct": round(float(np.mean(window_errs)), 2),
+            "rolling_mae_pct": r_mae,
+            "rolling_persistence_mae_pct": r_pers,
+            "rolling_skill_vs_persistence": compute_forecast_skill(r_mae, r_pers) if r_pers is not None else None,
             "condition_correct": bool(r.condition_correct),
             "model_version": r.model_version,
         })

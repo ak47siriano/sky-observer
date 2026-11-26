@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { AlertCircle, CheckCircle2, CloudRain, Compass } from "lucide-react";
+import { AlertCircle, AlertTriangle, CheckCircle2, CloudRain, Compass, Layers } from "lucide-react";
 import { ProbabilityBars } from "../components/Charts";
 import { useI18n } from "../i18n/I18nContext";
 import { api } from "../services/api";
@@ -9,11 +9,20 @@ export const ForecastPage: React.FC<{ forecasts: ForecastItem[] }> = ({ forecast
   const { t, tEnum } = useI18n();
   const [verification, setVerification] = useState<any>(null);
   const [history, setHistory] = useState<ForecastItem[]>([]);
+  const [advHorizon, setAdvHorizon] = useState<number>(15);
+  const [advNonce, setAdvNonce] = useState<number>(0);
 
   useEffect(() => {
     api.getForecastVerification().then(setVerification).catch(() => {});
     api.getForecastHistory(40).then((d) => setHistory(d.items || [])).catch(() => {});
+    setAdvNonce(Date.now());
   }, [forecasts]);
+
+  const formatSkill = (s: number | null | undefined) => {
+    if (s == null || Number.isNaN(Number(s))) return "—";
+    const pct = Number(s) * 100;
+    return `${pct >= 0 ? "+" : ""}${pct.toFixed(1)}%`;
+  };
 
   return (
     <div className="space-y-4">
@@ -28,49 +37,78 @@ export const ForecastPage: React.FC<{ forecasts: ForecastItem[] }> = ({ forecast
         <div className="obs-panel p-10 text-center text-sm text-[#8E95A2]">{t("forecast.unavailable")}</div>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
-          {forecasts.map((fc) => (
-            <div key={fc.id} className="obs-panel p-4 space-y-3">
-              <div className="flex items-center justify-between">
-                <span className="px-2.5 py-0.5 rounded-md bg-white/[0.08] text-[#F4F5F7] text-xs font-mono font-semibold tabular-nums">
-                  +{fc.horizon_minutes} min
-                </span>
-                <span className="text-xs font-mono tabular-nums text-[#8E95A2]">
-                  {t("forecast.conf")} {(fc.confidence * 100).toFixed(0)}%
-                </span>
-              </div>
-
-              <div>
-                <div className="text-base font-semibold text-white">{tEnum(fc.forecast)}</div>
-                <div className="text-xs text-[#8E95A2] mt-0.5">
-                  {t("forecast.predCover")}{" "}
-                  <span className="font-mono tabular-nums text-sky-300 font-semibold">
-                    {fc.cloud_cover_prediction.toFixed(1)}%
+          {forecasts.map((fc) => {
+            const p10 = fc.cover_p10 ?? fc.baselines?.cover_p10;
+            const p90 = fc.cover_p90 ?? fc.baselines?.cover_p90;
+            const fovExit = fc.baselines?.fov_exit_fraction;
+            const isLowRel = Boolean(fc.low_reliability || fc.baselines?.low_reliability);
+            return (
+              <div key={fc.id} className="obs-panel p-4 space-y-3">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="px-2.5 py-0.5 rounded-md bg-white/[0.08] text-[#F4F5F7] text-xs font-mono font-semibold tabular-nums">
+                    +{fc.horizon_minutes} min
                   </span>
-                </div>
-              </div>
-
-              <ProbabilityBars
-                items={[
-                  { label: t("forecast.clearing"), value: fc.clearing_prob, color: "#34D399" },
-                  { label: t("forecast.increasing"), value: fc.increasing_prob, color: "#60A5FA" },
-                  { label: t("forecast.overcast"), value: fc.overcast_prob, color: "#94A3B8" },
-                  { label: t("forecast.darkening"), value: fc.darkening_prob, color: "#F59E0B" },
-                  { label: t("forecast.precipExp"), value: fc.precip_signal_prob, color: "#818CF8" },
-                ]}
-              />
-
-              <div className="border-t border-white/[0.06] pt-2.5 space-y-1.5">
-                <div className="obs-label">{t("forecast.signals")}</div>
-                <div className="flex flex-wrap gap-1">
-                  {fc.signals.map((sig) => (
-                    <span key={sig} className="px-1.5 py-0.5 rounded bg-white/[0.06] text-[10px] font-mono text-[#C5CBD5]">
-                      {tEnum(sig)}
+                  <div className="flex items-center gap-1.5">
+                    {isLowRel && (
+                      <span
+                        title={fc.baselines?.low_reliability_reason || t("forecast.lowReliability")}
+                        className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-amber-500/15 border border-amber-500/30 text-amber-300 text-[10px] font-mono"
+                      >
+                        <AlertTriangle className="w-3 h-3" />
+                        {t("forecast.lowReliability")}
+                      </span>
+                    )}
+                    <span className="text-xs font-mono tabular-nums text-[#8E95A2]">
+                      {t("forecast.conf")} {(fc.confidence * 100).toFixed(0)}%
                     </span>
-                  ))}
+                  </div>
+                </div>
+
+                <div>
+                  <div className="text-base font-semibold text-white">{tEnum(fc.forecast)}</div>
+                  <div className="text-xs text-[#8E95A2] mt-0.5 flex flex-wrap items-baseline gap-x-2">
+                    <span>
+                      {t("forecast.predCover")}{" "}
+                      <span className="font-mono tabular-nums text-sky-300 font-semibold">
+                        {fc.cloud_cover_prediction.toFixed(1)}%
+                      </span>
+                    </span>
+                    {p10 != null && p90 != null && (
+                      <span className="text-[11px] font-mono tabular-nums text-[#9AA1AD]">
+                        ({t("forecast.uncertaintyRange")}: {Number(p10).toFixed(0)}–{Number(p90).toFixed(0)}%)
+                      </span>
+                    )}
+                  </div>
+                  {fovExit != null && Number(fovExit) >= 0.35 && (
+                    <div className="text-[10px] font-mono text-amber-300/80 mt-0.5">
+                      {t("forecast.fovExit")}: {(Number(fovExit) * 100).toFixed(0)}%
+                    </div>
+                  )}
+                </div>
+
+                <ProbabilityBars
+                  items={[
+                    { label: t("forecast.clearing"), value: fc.clearing_prob, color: "#34D399" },
+                    { label: t("forecast.increasing"), value: fc.increasing_prob, color: "#60A5FA" },
+                    { label: t("forecast.overcast"), value: fc.overcast_prob, color: "#94A3B8" },
+                    { label: t("forecast.darkening"), value: fc.darkening_prob, color: "#F59E0B" },
+                    { label: t("forecast.precipExp"), value: fc.precip_signal_prob, color: "#818CF8" },
+                  ]}
+                />
+
+                <div className="border-t border-white/[0.06] pt-2.5 space-y-1.5">
+                  <div className="obs-label">{t("forecast.signals")}</div>
+                  <div className="flex flex-wrap gap-1">
+                    {fc.signals.map((sig) => (
+                      <span key={sig} className="px-1.5 py-0.5 rounded bg-white/[0.06] text-[10px] font-mono text-[#C5CBD5]">
+                        {tEnum(sig)}
+                      </span>
+                    ))}
+                  </div>
                 </div>
               </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
       )}
 
@@ -92,6 +130,40 @@ export const ForecastPage: React.FC<{ forecasts: ForecastItem[] }> = ({ forecast
             {t("forecast.modelVersion")}{" "}
             <span className="font-mono text-[#D2D6DF]">{forecasts[0]?.model_version || "—"}</span>
           </div>
+
+          {forecasts.length > 0 && forecasts[0]?.status === "available" && (
+            <div className="pt-3 border-t border-white/[0.06] space-y-2">
+              <div className="flex items-center justify-between gap-2">
+                <span className="obs-label flex items-center gap-1.5">
+                  <Layers className="w-3.5 h-3.5 text-sky-400" /> {t("forecast.advectedPreview")}
+                </span>
+                <div className="flex items-center gap-1">
+                  {[5, 15, 20].map((h) => (
+                    <button
+                      key={h}
+                      type="button"
+                      onClick={() => setAdvHorizon(h)}
+                      className={`px-2 py-0.5 rounded text-[10px] font-mono transition ${
+                        advHorizon === h
+                          ? "bg-sky-500/20 text-sky-300 border border-sky-500/40"
+                          : "bg-white/[0.05] text-[#8E95A2] hover:text-white"
+                      }`}
+                    >
+                      +{h}m
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <img
+                src={`/api/forecast/advected-mask.png?horizon=${advHorizon}&t=${advNonce}`}
+                alt="Advected cloud probability map"
+                className="w-full max-h-44 object-contain rounded bg-[#08090B] border border-white/[0.08]"
+                onError={(e) => {
+                  (e.currentTarget as HTMLImageElement).style.display = "none";
+                }}
+              />
+            </div>
+          )}
         </div>
 
         <div className="obs-panel p-5 space-y-3">
@@ -102,7 +174,7 @@ export const ForecastPage: React.FC<{ forecasts: ForecastItem[] }> = ({ forecast
             <p className="text-xs text-[#8E95A2]">{t("forecast.verificationEmpty")}</p>
           ) : (
             <div className="space-y-3">
-              <div className="grid grid-cols-3 sm:grid-cols-5 gap-2 text-xs">
+              <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-2 text-xs">
                 <div className="obs-inset p-2.5">
                   <div className="obs-label">{t("forecast.verified")}</div>
                   <div className="font-mono tabular-nums font-bold text-white mt-0.5">{verification.total_verified}</div>
@@ -112,8 +184,30 @@ export const ForecastPage: React.FC<{ forecasts: ForecastItem[] }> = ({ forecast
                   <div className="font-mono tabular-nums font-bold text-sky-300 mt-0.5">{verification.overall.mae_pct}%</div>
                 </div>
                 <div className="obs-inset p-2.5">
+                  <div className="obs-label">{t("forecast.persMae")}</div>
+                  <div className="font-mono tabular-nums font-bold text-[#C5CBD5] mt-0.5">
+                    {verification.overall.persistence_mae_pct != null ? `${verification.overall.persistence_mae_pct}%` : "—"}
+                  </div>
+                </div>
+                <div className="obs-inset p-2.5">
+                  <div className="obs-label">{t("forecast.skillVsPers")}</div>
+                  <div
+                    className={`font-mono tabular-nums font-bold mt-0.5 ${
+                      verification.overall.beats_persistence ? "text-emerald-300" : "text-amber-300"
+                    }`}
+                  >
+                    {formatSkill(verification.overall.skill_vs_persistence)}
+                  </div>
+                </div>
+                <div className="obs-inset p-2.5">
                   <div className="obs-label">{t("forecast.rmse")}</div>
                   <div className="font-mono tabular-nums font-bold text-sky-300 mt-0.5">{verification.overall.rmse_pct}%</div>
+                </div>
+                <div className="obs-inset p-2.5">
+                  <div className="obs-label">{t("forecast.ofMae")}</div>
+                  <div className="font-mono tabular-nums font-bold text-[#C5CBD5] mt-0.5">
+                    {verification.overall.optical_flow_mae_pct != null ? `${verification.overall.optical_flow_mae_pct}%` : "—"}
+                  </div>
                 </div>
                 <div className="obs-inset p-2.5">
                   <div className="obs-label">{t("forecast.accuracy")}</div>
@@ -126,6 +220,45 @@ export const ForecastPage: React.FC<{ forecasts: ForecastItem[] }> = ({ forecast
                   <div className="font-mono tabular-nums font-bold text-amber-300 mt-0.5">{verification.overall.brier_score}</div>
                 </div>
               </div>
+
+              {verification.by_horizon && Object.keys(verification.by_horizon).length > 0 && (
+                <div>
+                  <div className="obs-label mb-1.5">{t("forecast.byHorizon")}</div>
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-[11px] font-mono tabular-nums text-left">
+                      <thead className="text-[#8E95A2] border-b border-white/[0.08]">
+                        <tr>
+                          <th className="py-1 pr-2">+min</th>
+                          <th className="py-1 pr-2">n</th>
+                          <th className="py-1 pr-2">{t("forecast.mae")}</th>
+                          <th className="py-1 pr-2">{t("forecast.persMae")}</th>
+                          <th className="py-1 pr-2">{t("forecast.ofMae")}</th>
+                          <th className="py-1">{t("forecast.skillVsPers")}</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-white/[0.05]">
+                        {Object.entries(verification.by_horizon).map(([h, stats]: [string, any]) => (
+                          <tr key={h}>
+                            <td className="py-1 pr-2 text-sky-300">+{h}m</td>
+                            <td className="py-1 pr-2 text-[#8E95A2]">{stats.count}</td>
+                            <td className="py-1 pr-2 text-white">{stats.mae_pct}%</td>
+                            <td className="py-1 pr-2 text-[#C5CBD5]">
+                              {stats.persistence_mae_pct != null ? `${stats.persistence_mae_pct}%` : "—"}
+                            </td>
+                            <td className="py-1 pr-2 text-[#C5CBD5]">
+                              {stats.optical_flow_mae_pct != null ? `${stats.optical_flow_mae_pct}%` : "—"}
+                            </td>
+                            <td className={`py-1 ${stats.beats_persistence ? "text-emerald-300" : "text-amber-300"}`}>
+                              {formatSkill(stats.skill_vs_persistence)}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
+
               {verification.calibration_bins?.length > 0 && (
                 <div>
                   <div className="obs-label mb-1.5">{t("forecast.calibration")}</div>

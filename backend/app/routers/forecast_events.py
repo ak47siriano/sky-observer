@@ -3,21 +3,27 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 
+import cv2
 from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import Response
 from sqlalchemy.orm import Session
 
 from app.config import get_config_manager
 from app.database import get_db
+from app.forecast.advection import advect_cloud_mask_optical_flow, render_advected_probability_png
 from app.forecast.verification import compute_verification_summary
 from app.models_db import EventAlert, Forecast, Observation, safe_json_loads
 from app.schemas import EventFeedbackRequest, EventsClearRequest
+from app.vision.masking import build_valid_sky_mask_from_config
 
 router = APIRouter()
 
 
 def forecast_to_dict(fc: Forecast) -> dict[str, Any]:
+    baselines = safe_json_loads(getattr(fc, "baseline_metrics_json", None), {})
     return {
         "id": fc.id,
         "generated_at": fc.generated_at.isoformat() if fc.generated_at else None,
@@ -37,6 +43,10 @@ def forecast_to_dict(fc: Forecast) -> dict[str, Any]:
         "signals": safe_json_loads(fc.signals_json, []),
         "reasons": safe_json_loads(fc.reasons_json, []),
         "limitations": safe_json_loads(fc.limitations_json, []),
+        "baselines": baselines,
+        "low_reliability": bool(baselines.get("low_reliability", False)),
+        "cover_p10": baselines.get("cover_p10"),
+        "cover_p90": baselines.get("cover_p90"),
         "model_version": fc.model_version,
         "verified": fc.verified,
     }
@@ -87,6 +97,40 @@ def apply_event_feedback(
                 obs.is_event_snapshot = True
     db.commit()
     return event_to_dict(ev)
+
+
+@router.get("/api/forecast/advected-mask.png")
+def api_forecast_advected_mask_png(
+    horizon: int = Query(15, ge=1, le=60),
+    db: Session = Depends(get_db),
+) -> Response:
+    """Return optical-flow advected probabilistic future cloud mask PNG for the latest usable observation."""
+    obs = db.query(Observation).filter(Observation.is_usable.is_(True)).order_by(Observation.id.desc()).first()
+    if obs is None or not obs.seg_mask_path or not Path(obs.seg_mask_path).exists():
+        raise HTTPException(status_code=404, detail="No usable cloud mask available for advection")
+    seg_mask = cv2.imread(obs.seg_mask_path, cv2.IMREAD_GRAYSCALE)
+    if seg_mask is None or seg_mask.size == 0:
+        raise HTTPException(status_code=404, detail="Segmentation mask unreadable")
+    cfg = get_config_manager().get()
+    valid_mask = build_valid_sky_mask_from_config(seg_mask.shape[:2], cfg.camera)
+    mot = safe_json_loads(obs.motion_metrics_json, {})
+    adv = advect_cloud_mask_optical_flow(
+        seg_mask=seg_mask,
+        dx_px_s=float(mot.get("dx_px_s", 0.0) or 0.0),
+        dy_px_s=float(mot.get("dy_px_s", 0.0) or 0.0),
+        horizon_minutes=float(horizon),
+        orig_width=obs.width or None,
+        orig_height=obs.height or None,
+        valid_mask=valid_mask,
+        resolution=int(cfg.forecast.advection_resolution),
+        ensemble_members=int(cfg.forecast.ensemble_members),
+        motion_consistency=float(obs.motion_consistency or 0.5),
+    )
+    prob_map = adv.get("cloud_probability_map")
+    if prob_map is None:
+        raise HTTPException(status_code=500, detail="Failed to compute advected probability map")
+    png_bytes = render_advected_probability_png(prob_map, valid_mask=valid_mask, out_width=384)
+    return Response(content=png_bytes, media_type="image/png", headers={"Cache-Control": "no-store"})
 
 
 @router.get("/api/forecast/latest")
