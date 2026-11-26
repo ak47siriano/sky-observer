@@ -1000,7 +1000,17 @@ export const ModelLabPage: React.FC = () => {
                       )}
                     </td>
                     <td className="py-2 pr-3 text-[11px] font-mono text-[#8E95A2]">
-                      {t("models.builtInActionHint")}
+                      {segNeuralActive ? (
+                        <button
+                          type="button"
+                          onClick={() => api.activateModel("radiometric-physics-v1").then(refresh)}
+                          className="obs-btn-primary px-2.5 py-1 text-[11px] font-sans"
+                        >
+                          {t("models.activate")}
+                        </button>
+                      ) : (
+                        t("models.builtInActionHint")
+                      )}
                     </td>
                   </tr>
                 );
@@ -1032,7 +1042,17 @@ export const ModelLabPage: React.FC = () => {
                     )}
                   </td>
                   <td className="py-2 pr-3">
-                    {!m.is_active && (
+                    {m.is_active ? (
+                      m.model_family === "segmentation" && (
+                        <button
+                          type="button"
+                          onClick={() => api.deactivateModelFamily("segmentation").then(refresh)}
+                          className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-amber-500/15 hover:bg-amber-500/25 border border-amber-400/35 text-amber-200 text-[11px] font-medium transition"
+                        >
+                          {t("models.deactivate")}
+                        </button>
+                      )
+                    ) : (
                       <div className="inline-flex items-center gap-1.5">
                         <button
                           type="button"

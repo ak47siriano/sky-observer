@@ -269,6 +269,7 @@ export const TRANSLATIONS: Record<Locale, Record<string, string>> = {
     "models.builtInActionHint": "Core calibrated engine",
     "models.builtInFilterHint": "{n} · built-in",
     "models.activate": "Activate",
+    "models.deactivate": "Deactivate",
     "models.noModels": "No trained PyTorch checkpoints registered yet. Run training above.",
     "models.importTitle": "Import Local Dataset Directory",
     "models.importDesc":
@@ -1034,6 +1035,7 @@ export const TRANSLATIONS: Record<Locale, Record<string, string>> = {
     "models.builtInActionHint": "Motore principale calibrato",
     "models.builtInFilterHint": "{n} · integrato",
     "models.activate": "Attiva",
+    "models.deactivate": "Disattiva",
     "models.noModels": "Nessun checkpoint PyTorch registrato. Avvia un addestramento sopra.",
     "models.importTitle": "Importa Cartella Dataset Locale",
     "models.importDesc":

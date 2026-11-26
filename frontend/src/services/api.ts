@@ -117,6 +117,8 @@ export const api = {
     request<any>(`/api/models/training/stop${jobId ? `?job_id=${encodeURIComponent(jobId)}` : ""}`, { method: "POST" }),
   activateModel: (modelId: string) =>
     request<any>("/api/models/activate", { method: "POST", body: JSON.stringify({ model_id: modelId }) }),
+  deactivateModelFamily: (modelFamily: string) =>
+    request<any>("/api/models/deactivate", { method: "POST", body: JSON.stringify({ model_family: modelFamily }) }),
   rollbackModel: (modelFamily: string) =>
     request<any>("/api/models/rollback", { method: "POST", body: JSON.stringify({ model_family: modelFamily }) }),
   deleteModel: (modelId: string, force = false) =>

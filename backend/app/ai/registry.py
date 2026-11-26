@@ -16,6 +16,7 @@ from app.config import get_config_manager
 from app.models_db import ModelRegistry, TrainingSession
 
 BASELINE_DEFAULT_MARKER = "[baseline-default]"
+BUILTIN_RADIOMETRIC_MODEL_ID = "radiometric-physics-v1"
 
 
 def is_default_baseline_model(rec: ModelRegistry) -> bool:
@@ -184,6 +185,25 @@ def activate_model_by_id(db: Session, model_id: str) -> ModelRegistry:
     db.refresh(target)
     _model_cache.refresh_from_db(db)
     return target
+
+
+def deactivate_model_family(db: Session, model_family: str) -> dict[str, Any]:
+    """Deactivate all neural checkpoints for a model family so inference falls back to built-in logic."""
+    fam = (model_family or "").strip().lower()
+    if fam not in {"segmentation", "classification", "temporal", "event"}:
+        raise ValueError(f"Unsupported model family: {model_family}")
+    updated = (
+        db.query(ModelRegistry)
+        .filter(ModelRegistry.model_family == fam, ModelRegistry.is_active.is_(True))
+        .update({"is_active": False})
+    )
+    db.commit()
+    _model_cache.refresh_from_db(db)
+    return {
+        "deactivated_family": fam,
+        "deactivated_count": int(updated),
+        "active_engine": BUILTIN_RADIOMETRIC_MODEL_ID if fam == "segmentation" else "built-in",
+    }
 
 
 def rollback_model_family(db: Session, model_family: str) -> ModelRegistry:

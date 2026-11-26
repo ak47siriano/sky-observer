@@ -219,3 +219,40 @@ def test_purge_models_preserves_default_baseline_models(isolated_env):
         assert remaining["classification-v1.0.0-default"].is_active is True
         assert "segmentation-v1.0.0-default" in remaining
         assert remaining["segmentation-v1.0.0-default"].is_active is False
+
+
+def test_activate_and_deactivate_segmentation_returns_to_builtin(isolated_env):
+    seg_model, _ = build_model_for_family("segmentation", "CloudSegUNet-Mobile", pretrained=False)
+    seg_pt = isolated_env.models_dir / "seg_toggle_test.pt"
+    torch.save({"model_state_dict": seg_model.state_dict()}, seg_pt)
+
+    with get_db_session() as db:
+        register_and_maybe_activate(
+            db=db,
+            model_id="segmentation-v1.0.0-default",
+            model_family="segmentation",
+            architecture="CloudSegUNet-Mobile",
+            version="v1.0.0",
+            weights_path=seg_pt,
+            metrics={"val_miou": 0.78},
+            activate=False,
+        )
+
+    with TestClient(app) as client:
+        # Activate neural segmentation model
+        r_on = client.post("/api/models/activate", json={"model_id": "segmentation-v1.0.0-default"})
+        assert r_on.status_code == 200
+        assert "segmentation" in client.get("/api/models/active").json()["active"]
+
+        # Deactivate via /api/models/deactivate -> returns to radiometric-physics-v1 built-in
+        r_off = client.post("/api/models/deactivate", json={"model_family": "segmentation"})
+        assert r_off.status_code == 200
+        assert r_off.json()["active_engine"] == "radiometric-physics-v1"
+        assert "segmentation" not in client.get("/api/models/active").json()["active"]
+
+        # Re-activate neural segmentation, then switch back via activating radiometric-physics-v1 directly
+        assert client.post("/api/models/activate", json={"model_id": "segmentation-v1.0.0-default"}).status_code == 200
+        r_builtin = client.post("/api/models/activate", json={"model_id": "radiometric-physics-v1"})
+        assert r_builtin.status_code == 200
+        assert r_builtin.json()["activated"] == "radiometric-physics-v1"
+        assert "segmentation" not in client.get("/api/models/active").json()["active"]

@@ -30,7 +30,9 @@ from app.ai.datasets import (
 )
 from app.ai.device import HARDWARE_PROFILES, get_hardware_status
 from app.ai.registry import (
+    BUILTIN_RADIOMETRIC_MODEL_ID,
     activate_model_by_id,
+    deactivate_model_family,
     delete_model_by_id,
     get_model_cache,
     prune_old_models,
@@ -806,11 +808,28 @@ def api_models_training_stop(job_id: str | None = None, db: Session = Depends(ge
 
 @app.post("/api/models/activate")
 def api_models_activate(req: ActivateModelRequest, db: Session = Depends(get_db)) -> dict[str, Any]:
+    if req.model_id == BUILTIN_RADIOMETRIC_MODEL_ID:
+        res = deactivate_model_family(db, "segmentation")
+        return {
+            "activated": BUILTIN_RADIOMETRIC_MODEL_ID,
+            "model_family": "segmentation",
+            "version": "built-in",
+            "deactivated_count": res["deactivated_count"],
+        }
     try:
         row = activate_model_by_id(db, req.model_id)
         return {"activated": row.model_id, "model_family": row.model_family, "version": row.version}
     except (ValueError, FileNotFoundError) as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.post("/api/models/deactivate")
+def api_models_deactivate(req: RollbackModelRequest, db: Session = Depends(get_db)) -> dict[str, Any]:
+    """Deactivate neural checkpoints for a model family and return to built-in engine (e.g. radiometric-physics-v1)."""
+    try:
+        return deactivate_model_family(db, req.model_family)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @app.post("/api/models/rollback")
