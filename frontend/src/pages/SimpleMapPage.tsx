@@ -10,6 +10,39 @@ interface SimpleMapPageProps {
   onToggleMode: (offline: boolean) => void;
 }
 
+function kmToBounds(lat: number, lon: number, radiusKm: number): L.LatLngTuple[] {
+  const dLat = radiusKm / 111.32;
+  const cosLat = Math.max(0.15, Math.cos((lat * Math.PI) / 180));
+  const dLon = radiusKm / (111.32 * cosLat);
+  return [
+    [lat - dLat, lon - dLon],
+    [lat + dLat, lon + dLon],
+  ];
+}
+
+function zoomForRadius(radKm: number): number {
+  if (radKm <= 3) return 12;
+  if (radKm <= 8) return 11;
+  if (radKm <= 20) return 10;
+  if (radKm <= 45) return 9;
+  return 8;
+}
+
+function findNearestRainFrame(frames: any[], targetEpochSec: number | null) {
+  if (!frames || frames.length === 0) return null;
+  if (targetEpochSec == null) return frames[frames.length - 1];
+  let best = frames[0];
+  let bestDiff = Math.abs(Number(best.time ?? 0) - targetEpochSec);
+  for (let i = 1; i < frames.length; i++) {
+    const diff = Math.abs(Number(frames[i].time ?? 0) - targetEpochSec);
+    if (diff < bestDiff) {
+      best = frames[i];
+      bestDiff = diff;
+    }
+  }
+  return best;
+}
+
 export const SimpleMapPage: React.FC<SimpleMapPageProps> = ({ offlineMode, onToggleMode }) => {
   const { t } = useI18n();
   const [state, setState] = useState<any>(null);
@@ -21,8 +54,12 @@ export const SimpleMapPage: React.FC<SimpleMapPageProps> = ({ offlineMode, onTog
   const containerRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<L.Map | null>(null);
   const pinRef = useRef<L.Marker | null>(null);
+  const fovPolyRef = useRef<L.Polygon | null>(null);
   const cloudOverlayRef = useRef<L.ImageOverlay | null>(null);
+  const regionalOverlayRef = useRef<L.ImageOverlay | null>(null);
+  const regionalKeyRef = useRef<string>("");
   const rainLayerRef = useRef<L.TileLayer | null>(null);
+  const rainUrlRef = useRef<string>("");
 
   useEffect(() => {
     const load = () => {
@@ -41,8 +78,11 @@ export const SimpleMapPage: React.FC<SimpleMapPageProps> = ({ offlineMode, onTog
   }, [offlineMode]);
 
   const history: any[] = Array.isArray(state?.camera_history) ? state.camera_history : [];
+  const rainFrames: any[] = Array.isArray(state?.rainviewer?.radar_frames) ? state.rainviewer.radar_frames : [];
   const safeIdx = history.length > 0 ? Math.min(Math.max(0, frameIdx), history.length - 1) : 0;
   const activeObs = history.length > 0 ? history[safeIdx] : state?.observation ?? null;
+  const activeTimeSec: number | null = activeObs?.time ?? null;
+  const matchedRainFrame = findNearestRainFrame(rainFrames, activeTimeSec);
 
   useEffect(() => {
     if (!isPlaying || history.length <= 1) return;
@@ -56,17 +96,21 @@ export const SimpleMapPage: React.FC<SimpleMapPageProps> = ({ offlineMode, onTog
     if (!containerRef.current || mapRef.current || !state?.location) return;
     const lat = Number(state.location.latitude);
     const lon = Number(state.location.longitude);
+    const radKm = Number(state.location.radar_radius_km || 15);
     const map = L.map(containerRef.current, {
       center: [lat, lon],
-      zoom: 11,
+      zoom: zoomForRadius(radKm),
       zoomControl: true,
     });
     L.tileLayer("/api/radar/tiles/dark_base/{z}/{x}/{y}.png", {
       maxZoom: 18,
-      attribution: "&copy; Esri",
+      attribution: "Tiles &copy; Esri",
     }).addTo(map);
     L.tileLayer("/api/radar/tiles/dark_ref/{z}/{x}/{y}.png", { maxZoom: 18 }).addTo(map);
     mapRef.current = map;
+    window.setTimeout(() => {
+      map.invalidateSize({ animate: false });
+    }, 120);
   }, [state?.location]);
 
   useEffect(() => {
@@ -76,8 +120,12 @@ export const SimpleMapPage: React.FC<SimpleMapPageProps> = ({ offlineMode, onTog
         mapRef.current = null;
       }
       pinRef.current = null;
+      fovPolyRef.current = null;
       cloudOverlayRef.current = null;
+      regionalOverlayRef.current = null;
+      regionalKeyRef.current = "";
       rainLayerRef.current = null;
+      rainUrlRef.current = "";
     };
   }, []);
 
@@ -86,6 +134,7 @@ export const SimpleMapPage: React.FC<SimpleMapPageProps> = ({ offlineMode, onTog
     if (!map || !state?.location) return;
     const lat = Number(state.location.latitude);
     const lon = Number(state.location.longitude);
+    const radKm = Number(state.location.radar_radius_km || 15);
     const label = state.location.location_description || t("simple.map.cameraPos");
 
     if (!pinRef.current) {
@@ -101,41 +150,91 @@ export const SimpleMapPage: React.FC<SimpleMapPageProps> = ({ offlineMode, onTog
     }
     pinRef.current.bindTooltip(label, { direction: "top", offset: [0, -10] });
 
-    const bounds = state.camera_projection?.overlay_bounds;
-    if (showClouds && activeObs?.id && Array.isArray(bounds) && bounds.length === 2) {
-      const url = `/api/radar/camera-cloud-overlay.png?observation_id=${activeObs.id}`;
+    // Wide regional cloud cover (when Online + Clouds ON)
+    if (!offlineMode && showClouds && Array.isArray(state.regional_cloud_bounds) && state.regional_cloud_bounds.length === 2) {
+      const rKey = `${lat.toFixed(3)},${lon.toFixed(3)},${state?.online_weather?.fetched_at || ""}`;
+      const rUrl = `/api/radar/regional-clouds.png?lat=${lat.toFixed(3)}&lon=${lon.toFixed(3)}&k=${encodeURIComponent(rKey)}`;
+      const rBounds = L.latLngBounds(state.regional_cloud_bounds as L.LatLngTuple[]);
+      if (!regionalOverlayRef.current) {
+        regionalOverlayRef.current = L.imageOverlay(rUrl, rBounds, {
+          opacity: 0.78,
+          interactive: false,
+        }).addTo(map);
+        regionalKeyRef.current = rKey;
+      } else if (regionalKeyRef.current !== rKey) {
+        regionalOverlayRef.current.setUrl(rUrl);
+        regionalOverlayRef.current.setBounds(rBounds);
+        regionalKeyRef.current = rKey;
+      }
+    } else if (regionalOverlayRef.current) {
+      map.removeLayer(regionalOverlayRef.current);
+      regionalOverlayRef.current = null;
+      regionalKeyRef.current = "";
+    }
+
+    // Subtle camera field-of-view cone
+    if (fovPolyRef.current) {
+      map.removeLayer(fovPolyRef.current);
+      fovPolyRef.current = null;
+    }
+    if (showClouds && Array.isArray(state.camera_projection?.fov_polygon) && state.camera_projection.fov_polygon.length >= 3) {
+      fovPolyRef.current = L.polygon(state.camera_projection.fov_polygon, {
+        color: "#38BDF8",
+        weight: 1.5,
+        dashArray: "4 4",
+        fillColor: "#38BDF8",
+        fillOpacity: 0.05,
+        interactive: false,
+      }).addTo(map);
+    }
+
+    // Camera projected cloud overlay (matches backend /api/radar/cloud-overlay.png)
+    if (showClouds && activeObs) {
+      const rawBounds = (state.camera_projection?.overlay_bounds || kmToBounds(lat, lon, radKm)) as L.LatLngTuple[];
+      const bounds = L.latLngBounds(rawBounds);
+      const obsQuery = activeObs.id ? `&obs_id=${activeObs.id}` : `&t=${encodeURIComponent(activeObs.captured_at || "")}`;
+      const url = `/api/radar/cloud-overlay.png?size=512&el=${state.location.orientation_elevation_deg ?? 65}&az=${state.location.orientation_azimuth_deg ?? 0}&roll=${state.location.orientation_roll_deg ?? 0}&tc=${state.location.tilt_correction_enabled ? 1 : 0}${obsQuery}`;
       if (!cloudOverlayRef.current) {
-        cloudOverlayRef.current = L.imageOverlay(url, bounds as L.LatLngBoundsExpression, {
+        cloudOverlayRef.current = L.imageOverlay(url, bounds, {
           opacity: 0.85,
+          interactive: false,
         }).addTo(map);
       } else {
         cloudOverlayRef.current.setUrl(url);
-        cloudOverlayRef.current.setBounds(L.latLngBounds(bounds as [number, number][]));
+        cloudOverlayRef.current.setBounds(bounds);
       }
     } else if (cloudOverlayRef.current) {
-      cloudOverlayRef.current.remove();
+      map.removeLayer(cloudOverlayRef.current);
       cloudOverlayRef.current = null;
     }
 
-    const rvFrames = state?.rainviewer?.radar_frames || [];
-    const latestRain = rvFrames.length > 0 ? rvFrames[rvFrames.length - 1] : null;
-    const rainHost = state?.rainviewer?.host;
-    if (!offlineMode && showRain && latestRain?.path && rainHost) {
-      const url = `${rainHost}${latestRain.path}/256/{z}/{x}/{y}/2/1_1.png`;
+    // RainViewer precipitation radar (uses frame.tile_url directly)
+    const targetRainUrl = !offlineMode && showRain ? matchedRainFrame?.tile_url || "" : "";
+    if (!targetRainUrl) {
       if (rainLayerRef.current) {
-        rainLayerRef.current.setUrl(url);
-      } else {
-        rainLayerRef.current = L.tileLayer(url, { opacity: 0.55, maxZoom: 18 }).addTo(map);
+        map.removeLayer(rainLayerRef.current);
+        rainLayerRef.current = null;
       }
-    } else if (rainLayerRef.current) {
-      rainLayerRef.current.remove();
-      rainLayerRef.current = null;
+      rainUrlRef.current = "";
+    } else if (rainUrlRef.current !== targetRainUrl) {
+      if (rainLayerRef.current) {
+        map.removeLayer(rainLayerRef.current);
+      }
+      rainLayerRef.current = L.tileLayer(targetRainUrl, {
+        maxNativeZoom: 7,
+        maxZoom: 18,
+        opacity: 0.68,
+        zIndex: 400,
+        attribution: "Weather data by RainViewer",
+      }).addTo(map);
+      rainUrlRef.current = targetRainUrl;
     }
-  }, [state, activeObs, showClouds, showRain, offlineMode, t]);
+  }, [state, activeObs, matchedRainFrame?.tile_url, showClouds, showRain, offlineMode, t]);
 
   const handleCenter = () => {
     if (!mapRef.current || !state?.location) return;
-    mapRef.current.setView([Number(state.location.latitude), Number(state.location.longitude)], 11, {
+    const radKm = Number(state.location.radar_radius_km || 15);
+    mapRef.current.setView([Number(state.location.latitude), Number(state.location.longitude)], zoomForRadius(radKm), {
       animate: true,
     });
   };

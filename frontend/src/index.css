@@ -184,3 +184,43 @@ input[type="range"] {
 .leaflet-tooltip-top:before {
   border-top-color: #343b48 !important;
 }
+
+.radar-pin-wrap {
+  position: relative;
+  width: 24px;
+  height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.radar-pin-pulse {
+  position: absolute;
+  inset: 0;
+  border-radius: 9999px;
+  background: rgba(56, 189, 248, 0.35);
+  border: 1.5px solid rgba(56, 189, 248, 0.8);
+  animation: radar-pin-ping 2.2s cubic-bezier(0, 0, 0.2, 1) infinite;
+}
+
+.radar-pin-core {
+  position: relative;
+  width: 10px;
+  height: 10px;
+  border-radius: 9999px;
+  background: #38bdf8;
+  border: 2px solid #ffffff;
+  box-shadow: 0 0 12px rgba(56, 189, 248, 0.9);
+}
+
+@keyframes radar-pin-ping {
+  0% {
+    transform: scale(0.65);
+    opacity: 0.95;
+  }
+  75%,
+  100% {
+    transform: scale(1.9);
+    opacity: 0;
+  }
+}
