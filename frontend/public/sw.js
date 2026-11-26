@@ -1,4 +1,4 @@
-const CACHE_VERSION = "v3";
+const CACHE_VERSION = "v4";
 const STATIC_CACHE = `sky-observer-static-${CACHE_VERSION}`;
 const RUNTIME_CACHE = `sky-observer-runtime-${CACHE_VERSION}`;
 const TILE_CACHE = `sky-observer-tiles-${CACHE_VERSION}`;
@@ -17,7 +17,7 @@ function isAllowedTileHost(hostname) {
   );
 }
 
-const APP_SHELL = ["/", "/index.html", "/logo.png", "/manifest.webmanifest"];
+const APP_SHELL = ["/", "/index.html", "/logo-simple.svg", "/logo-expert.svg", "/manifest.webmanifest"];
 
 self.addEventListener("install", (event) => {
   event.waitUntil(

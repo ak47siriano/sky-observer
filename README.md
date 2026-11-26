@@ -1,12 +1,16 @@
 <div align="center">
 
-<img src="docs/assets/logo.png" alt="Sky Observer Logo" width="120" height="120" />
+<p>
+  <img src="docs/assets/logo-simple.svg" alt="Sky Observer — Simple Mode Logo" width="108" height="108" />
+  &nbsp;&nbsp;&nbsp;&nbsp;
+  <img src="docs/assets/logo-expert.svg" alt="Sky Observer — Expert Mode Logo" width="108" height="108" />
+</p>
 
 # Sky Observer
 
 **Local-first AI sky observatory, projected cloud cover map, and short-term optical-flow nowcasting from any smartphone, USB/RTSP camera, ESP32-CAM, or AllSky feed.**
 
-*Runs 100% offline on CPU out of the box via calibrated radiometric physics (`radiometric-physics-v1`), with optional PyTorch segmentation backends (`DeepLabV3`, `DINOv3` linear probe, `CloudSegUNet`), honest persistence-baselined nowcasting, and Home Assistant integration.*
+*Runs 100% offline on CPU out of the box via calibrated radiometric physics (`radiometric-physics-v1`), with an instant **`Simple` ↔ `Expert`** mode switch (and adaptive Doppler Scope brand icon), optional PyTorch segmentation backends (`DeepLabV3`, `DINOv3` linear probe, `CloudSegUNet`), honest persistence-baselined nowcasting, and Home Assistant integration.*
 
 [![CI](https://github.com/ak47siriano/sky-observer/actions/workflows/ci.yml/badge.svg)](https://github.com/ak47siriano/sky-observer/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-F59E0B.svg)](LICENSE)
@@ -31,8 +35,9 @@
 
 | Area | Implementation |
 | :--- | :--- |
-| **Zero-GPU Default Segmentation** | `radiometric-physics-v1` (CIE-Lab + Red/Blue ratio + AWB compensation + sun-glare & dark-base guards) runs on a **4 GB RAM CPU-only PC** with no GPU or downloaded weights. |
-| **Pluggable Neural Backends** | Optional **daytime `DeepLabV3-MobileNetV3`** (`torchvision`, BSD-3-Clause), **day/night `DINOv3-LinearProbe`** (LenghuSky-8-inspired frozen ViT + `1x1 Conv` probe trained on 50–100 local frames via [`scripts/train_dinov3_probe.py`](scripts/train_dinov3_probe.py)), and `CloudSegUNet`. |
+| **Dual UI Modes (`Simple` ↔ `Expert`)** | Persistent 1-click switch in the top header with dynamic **Doppler Scope** brand logo & favicon: **Simple Mode** gives an at-a-glance visual sky verdict, clean cloud/rain map, and basic setup; **Expert Mode** unlocks full METAR/SYNOP telemetry, compare swipe, motion vectors, forecasting, and Model Lab. |
+| **Zero-GPU Default Segmentation** | `radiometric-physics-v1` (CIE-Lab + Red/Blue ratio + AWB compensation + sun-glare & dark-base guards) runs on a **4 GB RAM CPU-only PC** with no GPU or downloaded weights, and can be reactivated anytime with 1 click (`POST /api/models/deactivate`). |
+| **Pluggable Neural Backends** | Optional **daytime `DeepLabV3-MobileNetV3`** (`torchvision`, BSD-3-Clause), **day/night `DINOv3-LinearProbe`** (LenghuSky-8-inspired frozen ViT + `1x1 Conv` probe trained on 50–100 local frames via [`scripts/train_dinov3_probe.py`](scripts/train_dinov3_probe.py)), and `CloudSegUNet`. Default `[baseline-default]` checkpoints are shielded from storage purges and pruning. |
 | **Honest Nowcasting & Skill Score** | Semi-Lagrangian optical-flow cloud mask advection + perturbed-flow ensemble (`cover_p10`–`cover_p90`, `fov_exit_fraction`, `GET /api/forecast/advected-mask.png`) benchmarked against **Persistence** (`skill = 1 - MAE_model / MAE_persistence`) with explicit `low_reliability` horizon warnings. |
 | **Projected Cloud Cover Map** | Reprojects local camera cloud classes onto dark/OSM/satellite Leaflet tiles with configurable **zenith cutoff (`<= 70 deg`)**, distance/zenith uncertainty opacity fade, and optional **RainViewer precipitation radar** + **Open-Meteo** NWP fusion. |
 | **Low-Cost Hardware QC & Night Mode** | Detects indoor window reflections, smartphone AE/AWB jumps, localized raindrops/smudges, and heavy 8x8 JPEG blockiness; switches automatically across `day` / `twilight` / `night` regimes with moon phase/visibility and DoG bright-star clarity cues. |

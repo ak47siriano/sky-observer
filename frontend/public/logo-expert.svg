@@ -1,0 +1,35 @@
+<svg viewBox="0 0 128 128" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="so-expert-ring" x1="18" y1="12" x2="110" y2="116" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#9BC7FF"/>
+      <stop offset="50%" stop-color="#5895EA"/>
+      <stop offset="100%" stop-color="#356EC4"/>
+    </linearGradient>
+    <linearGradient id="so-expert-sweep" x1="64" y1="64" x2="104" y2="24" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#93C5FD" stop-opacity="0.75"/>
+      <stop offset="55%" stop-color="#3B82F6" stop-opacity="0.3"/>
+      <stop offset="100%" stop-color="#1D4ED8" stop-opacity="0.02"/>
+    </linearGradient>
+    <clipPath id="so-expert-clip">
+      <circle cx="64" cy="64" r="54"/>
+    </clipPath>
+  </defs>
+  <circle cx="64" cy="64" r="56" fill="#061730" stroke="url(#so-expert-ring)" stroke-width="5"/>
+  <g clip-path="url(#so-expert-clip)">
+    <circle cx="64" cy="64" r="42" stroke="#5490E4" stroke-opacity="0.58" stroke-width="1.8"/>
+    <circle cx="64" cy="64" r="28" stroke="#5490E4" stroke-opacity="0.58" stroke-width="1.8"/>
+    <circle cx="64" cy="64" r="14" stroke="#5490E4" stroke-opacity="0.68" stroke-width="1.8"/>
+    <line x1="64" y1="8" x2="64" y2="120" stroke="#5490E4" stroke-opacity="0.58" stroke-width="1.8"/>
+    <line x1="8" y1="64" x2="120" y2="64" stroke="#5490E4" stroke-opacity="0.58" stroke-width="1.8"/>
+    <path d="M64 64 L64 10 A54 54 0 0 1 102.2 25.8 Z" fill="url(#so-expert-sweep)"/>
+    <line x1="64" y1="64" x2="102.2" y2="25.8" stroke="#BFDBFE" stroke-width="2.6" stroke-linecap="round"/>
+    <path d="M68 85 C61.5 81.8 64.8 72 72.2 67.5 C78.6 63.2 83 53.5 91.5 49 C98 45.8 106.5 40.5 111 47 C116.5 54.5 113.2 66.5 106.8 75 C100.4 82.6 93 90.2 84.4 96.6 C78 101 71.5 97.8 70.4 91.2 Z" fill="#0F766E" fill-opacity="0.88"/>
+    <path d="M70.4 82.8 C65 79.6 68.2 72 74.6 68.6 C81 64.4 85.4 55.8 92.8 52.5 C98.2 49.4 105.6 46 108.8 51.4 C113 57.8 108.8 67.6 103.4 74 C97 80.5 89.6 88 82.2 92.4 C76.8 95.6 72.5 91.2 72.5 85.8 Z" fill="#22C55E"/>
+    <path d="M76.8 79.4 C73.6 76.2 76.8 69.8 83.2 65.5 C88.6 61.2 95 55.8 100.4 58 C104.8 60.2 102.6 68.8 97.2 74.1 C91.8 79.4 84.4 84.8 79 83.8 Z" fill="#FACC15"/>
+    <path d="M83.2 76.2 C81.1 74 84.3 68.7 88.6 65.5 C92.9 63.4 97.2 62.3 98.3 65.5 C99.4 68.7 95 74 90.8 76.2 C86.5 78.3 84.3 78.3 83.2 76.2 Z" fill="#F97316"/>
+    <path d="M44.5 98 C42.4 94.8 47.8 89.4 53.2 87.2 C57.5 86.2 60.8 89.4 57.5 93.7 C54.2 98 47.8 101.2 44.5 98 Z" fill="#22C55E"/>
+    <circle cx="100.5" cy="38" r="3.8" fill="#0D9488"/>
+    <circle cx="97.5" cy="89" r="3.2" fill="#0D9488"/>
+    <circle cx="64" cy="64" r="5.5" fill="#93C5FD"/>
+  </g>
+</svg>

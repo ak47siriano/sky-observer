@@ -98,6 +98,15 @@ export function App() {
   };
 
   useEffect(() => {
+    const iconHref = uiMode === "simple" ? "/logo-simple.svg" : "/logo-expert.svg";
+    const link = document.querySelector<HTMLLinkElement>("link[rel='icon']");
+    if (link) {
+      link.type = "image/svg+xml";
+      link.href = iconHref;
+    }
+  }, [uiMode]);
+
+  useEffect(() => {
     if (
       system &&
       system.setup_completed === false &&
@@ -268,14 +277,14 @@ export function App() {
             onClick={() => (isSimple ? setSimplePage("simple_sky") : setPage("dashboard"))}
             className="flex items-center gap-2.5 shrink-0 text-left"
           >
-            <div className="relative">
+            <div className="relative shrink-0">
               <img
-                src="/logo.png"
-                alt="Sky Observer"
-                className="w-8 h-8 rounded object-cover border border-[#343B48] bg-[#101216]"
+                src={isSimple ? "/logo-simple.svg" : "/logo-expert.svg"}
+                alt={isSimple ? "Sky Observer Simple" : "Sky Observer Expert"}
+                className="w-10 h-10 object-contain transition-transform duration-200 hover:scale-105"
               />
               <span
-                className={`absolute -bottom-0.5 -right-0.5 w-2 h-2 rounded-full ring-2 ring-[#15181E] ${
+                className={`absolute bottom-0 right-0 w-2.5 h-2.5 rounded-full ring-2 ring-[#15181E] ${
                   system?.camera.connected ? "bg-emerald-500" : "bg-rose-500"
                 }`}
               />
