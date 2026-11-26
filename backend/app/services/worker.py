@@ -277,6 +277,23 @@ def process_and_store_frame(
         generate_forecasts_for_observation(db, obs, config)
 
     _broadcaster.publish("observation", observation_to_dict(obs))
+    if getattr(config, "mqtt", None) and config.mqtt.enabled:
+        try:
+            from app.services.mqtt_ha import get_mqtt_publisher
+
+            cov_data = safe_json_loads(obs.coverage_metrics_json, {})
+            mqtt_state = {
+                "state": obs.visual_condition,
+                "sky_regime": cov_data.get("sky_regime", "day"),
+                "cloud_coverage_pct": round(float(obs.cloud_coverage_pct), 1),
+                "dark_cloud_pct": round(float(obs.dark_cloud_pct), 1),
+                "dominant_cloud_type": obs.dominant_cloud_type,
+                "confidence": round(float(obs.classification_confidence), 3),
+                "captured_at": obs.captured_at.isoformat() if obs.captured_at else None,
+            }
+            get_mqtt_publisher().publish_observation(mqtt_state, config)
+        except Exception:
+            pass
     return obs
 
 
@@ -315,7 +332,10 @@ class SkyObserverWorker:
                 # Do not poll external camera URL if source_type is local_import or source_url is unconfigured (unless demo_simulation)
                 can_poll = (
                     (cfg.camera.source_type in {"demo_simulation", "webcam_device"})
-                    or (cfg.camera.source_type in {"http_snapshot", "mjpeg_stream", "rtsp", "web_stream"} and bool(cfg.camera.source_url.strip()))
+                    or (
+                        cfg.camera.source_type in {"http_snapshot", "mjpeg_stream", "rtsp", "web_stream", "allsky_folder"}
+                        and bool(cfg.camera.source_url.strip())
+                    )
                 )
 
                 if can_poll and (now - self._last_capture_ts) >= cfg.camera.capture_interval_seconds:

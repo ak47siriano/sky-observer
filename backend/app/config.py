@@ -82,6 +82,7 @@ class CameraConfig(BaseModel):
         "rtsp",
         "web_stream",
         "webcam_device",
+        "allsky_folder",
         "local_import",
         "demo_simulation",
     ] = "http_snapshot"
@@ -238,6 +239,27 @@ class OnlineWeatherConfig(BaseModel):
     rainviewer_enabled: bool = True
 
 
+class SolarPVConfig(BaseModel):
+    enabled: bool = False
+    pv_kwp: float = Field(default=3.0, ge=0.0, le=5000.0)
+    tilt_deg: float = Field(default=30.0, ge=0.0, le=90.0)
+    azimuth_deg: float = Field(default=180.0, ge=0.0, le=360.0)
+    system_loss_fraction: float = Field(default=0.14, ge=0.0, le=0.60)
+    ramp_alert_pct: float = Field(default=25.0, ge=5.0, le=90.0)
+
+
+class MQTTConfig(BaseModel):
+    enabled: bool = False
+    allow_in_offline_mode: bool = True  # LAN broker allowed when explicitly enabled
+    broker_host: str = ""
+    broker_port: int = Field(default=1883, ge=1, le=65535)
+    username: str = ""
+    password: str = ""
+    state_topic: str = "sky_observer/state"
+    ha_discovery_enabled: bool = True
+    ha_discovery_prefix: str = "homeassistant"
+
+
 class AppConfig(BaseModel):
     server: ServerConfig = Field(default_factory=ServerConfig)
     camera: CameraConfig = Field(default_factory=CameraConfig)
@@ -247,6 +269,8 @@ class AppConfig(BaseModel):
     storage: StorageConfig = Field(default_factory=StorageConfig)
     events: EventsConfig = Field(default_factory=EventsConfig)
     online_weather: OnlineWeatherConfig = Field(default_factory=OnlineWeatherConfig)
+    solar_pv: SolarPVConfig = Field(default_factory=SolarPVConfig)
+    mqtt: MQTTConfig = Field(default_factory=MQTTConfig)
 
     def resolve_path(self, rel_or_abs: str) -> Path:
         p = Path(rel_or_abs)

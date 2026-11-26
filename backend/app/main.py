@@ -520,6 +520,88 @@ def api_analysis_latest(db: Session = Depends(get_db)) -> dict[str, Any]:
     return {"available": True, "observation": observation_to_dict(obs)}
 
 
+@app.get("/api/sky-state")
+def api_sky_state(db: Session = Depends(get_db)) -> dict[str, Any]:
+    """Ultra-fast lightweight sky-state endpoint (<5ms) for Home Assistant, ESP32, and local automations."""
+    obs = db.query(Observation).order_by(Observation.id.desc()).first()
+    if not obs:
+        return {
+            "available": False,
+            "state": "unavailable",
+            "sky_regime": "unknown",
+            "cloud_coverage_pct": None,
+            "dominant_cloud_type": "unknown",
+            "confidence": 0.0,
+            "is_usable": False,
+        }
+    cov_data = safe_json_loads(obs.coverage_metrics_json, {})
+    q_data = safe_json_loads(obs.quality_metrics_json, {})
+    return {
+        "available": True,
+        "observation_id": obs.id,
+        "captured_at": obs.captured_at.isoformat() if obs.captured_at else None,
+        "state": obs.visual_condition,
+        "sky_regime": cov_data.get("sky_regime", "day"),
+        "cloud_coverage_pct": round(float(obs.cloud_coverage_pct), 1),
+        "clear_sky_pct": round(float(obs.clear_sky_pct), 1),
+        "dark_cloud_pct": round(float(obs.dark_cloud_pct), 1),
+        "dominant_cloud_type": obs.dominant_cloud_type,
+        "confidence": round(float(obs.classification_confidence), 3),
+        "quality_score": round(float(obs.quality_score), 3),
+        "qc_flags": q_data.get("flags", []),
+        "is_usable": bool(obs.is_usable),
+    }
+
+
+@app.get("/api/solar/pv")
+def api_solar_pv(db: Session = Depends(get_db)) -> dict[str, Any]:
+    """Optional clear-sky GHI, cloud-transmittance PV power output (kW), and short-term solar ramp alerts."""
+    from app.services.solar_pv import estimate_solar_pv_and_ramps
+
+    cfg = get_config_manager().get()
+    pv_cfg = cfg.solar_pv
+    obs = db.query(Observation).filter(Observation.is_usable.is_(True)).order_by(Observation.id.desc()).first()
+    if obs is None:
+        return {"available": False, "enabled": pv_cfg.enabled, "reason": "No usable sky observation yet"}
+
+    latest_fc = db.query(Forecast).order_by(Forecast.generated_at.desc(), Forecast.id.desc()).first()
+    fc_list: list[dict[str, Any]] = []
+    if latest_fc is not None:
+        rows = (
+            db.query(Forecast)
+            .filter(Forecast.generated_at == latest_fc.generated_at)
+            .order_by(Forecast.horizon_minutes.asc())
+            .all()
+        )
+        fc_list = [
+            {"horizon_minutes": r.horizon_minutes, "cloud_cover_prediction": r.cloud_cover_prediction}
+            for r in rows
+        ]
+
+    res = estimate_solar_pv_and_ramps(
+        lat=cfg.camera.latitude,
+        lon=cfg.camera.longitude,
+        thin_cloud_pct=float(obs.thin_cloud_pct),
+        dense_cloud_pct=float(obs.dense_cloud_pct),
+        dark_cloud_pct=float(obs.dark_cloud_pct),
+        cloud_coverage_pct=float(obs.cloud_coverage_pct),
+        pv_kwp=pv_cfg.pv_kwp,
+        panel_tilt_deg=pv_cfg.tilt_deg,
+        panel_azimuth_deg=pv_cfg.azimuth_deg,
+        system_loss_fraction=pv_cfg.system_loss_fraction,
+        ramp_alert_pct=pv_cfg.ramp_alert_pct,
+        forecast_horizons=fc_list,
+        dt_utc=obs.captured_at,
+    )
+    return {
+        "available": True,
+        "enabled": pv_cfg.enabled,
+        "observation_id": obs.id,
+        "captured_at": obs.captured_at.isoformat() if obs.captured_at else None,
+        **res,
+    }
+
+
 @app.get("/api/analysis/history")
 def api_analysis_history(
     limit: int = Query(120, ge=1, le=2000),

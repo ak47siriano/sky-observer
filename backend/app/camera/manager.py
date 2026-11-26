@@ -427,6 +427,32 @@ class CameraManager:
                 raise ConnectionError(f"Local webcam device {device_index} returned empty frame")
             return frame
 
+    def _capture_allsky_folder(self, folder_or_file: str) -> np.ndarray:
+        """Read the latest JPEG/PNG frame from a local AllSky (thomasjacquin/allsky or AllSkEye) output path."""
+        from pathlib import Path
+
+        raw = (folder_or_file or "").strip()
+        if not raw:
+            raise ValueError("AllSky folder path is empty.")
+        p = Path(raw).expanduser().resolve()
+        if p.is_file():
+            target = p
+        elif p.is_dir():
+            cands = [
+                f
+                for f in p.iterdir()
+                if f.is_file() and f.suffix.lower() in {".jpg", ".jpeg", ".png"}
+            ]
+            if not cands:
+                raise FileNotFoundError(f"No JPEG/PNG images found in AllSky folder: {p}")
+            target = max(cands, key=lambda f: f.stat().st_mtime)
+        else:
+            raise FileNotFoundError(f"AllSky path does not exist: {raw}")
+        img = cv2.imread(str(target), cv2.IMREAD_COLOR)
+        if img is None or img.size == 0:
+            raise ValueError(f"Unable to decode AllSky image: {target.name}")
+        return img
+
     def list_local_video_devices(self, max_index: int = 5) -> list[dict[str, Any]]:
         """Probe available local webcam / virtual camera devices (e.g., Iriun Webcam)."""
         devices: list[dict[str, Any]] = []
@@ -508,6 +534,8 @@ class CameraManager:
                     cfg.image_height,
                     cfg.frame_sampling,
                 )
+            elif cfg.source_type == "allsky_folder":
+                img = self._capture_allsky_folder(cfg.source_url)
             else:
                 raise ValueError(f"Unsupported camera source_type: {cfg.source_type}")
 

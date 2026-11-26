@@ -19,7 +19,7 @@ export const TRANSLATIONS: Record<Locale, Record<string, string>> = {
 
     "nav.overview": "Overview",
     "nav.vision": "Live Vision",
-    "nav.radar": "Radar Map",
+    "nav.radar": "Cloud Map",
     "nav.forecast": "Forecast",
     "nav.trends": "Trends",
     "nav.timelapse": "Timelapse",
@@ -312,6 +312,7 @@ export const TRANSLATIONS: Record<Locale, Record<string, string>> = {
     "settings.src.web_stream": "Public Web Live Stream (HLS .m3u8 / SkylineWebcams)",
     "settings.webStreamTosNotice": "Notice: ensure you have the rights to access this stream and comply with the hosting site's Terms of Service (e.g., SkylineWebcams).",
     "settings.src.webcam": "Local Webcam / USB / Virtual Camera",
+    "settings.src.allsky": "Local AllSky Folder (thomasjacquin/allsky / AllSkEye)",
     "settings.src.local": "Manual Local Image/Video Import",
     "settings.src.demo": "Demo Simulation (Synthetic Test Sky)",
     "settings.deviceIndexLabel": "Local Video Device Index (USB / Virtual)",
@@ -357,8 +358,8 @@ export const TRANSLATIONS: Record<Locale, Record<string, string>> = {
     "mode.onlineBadge": "Hybrid Mode · Local + Open-Meteo",
     "mode.switchedOffline": "Switched to 100% Offline Only mode.",
     "mode.switchedOnline": "Switched to Online Hybrid mode (Local Camera + Open-Meteo + RainViewer).",
-    "radar.title": "Geolocation Cloud Radar Map",
-    "radar.subtitle": "Set your location pin to project camera-observed clouds & motion onto the geographic radar map.",
+    "radar.title": "Projected Cloud Cover Map",
+    "radar.subtitle": "Set your location pin to project camera-observed clouds & motion onto the geographic map alongside optional RainViewer precipitation radar.",
     "radar.lat": "Latitude",
     "radar.lon": "Longitude",
     "radar.radiusKm": "Radius (km)",
@@ -590,8 +591,8 @@ export const TRANSLATIONS: Record<Locale, Record<string, string>> = {
       "Computes the exact Cloud Coverage % (Total, Thin, Dense, Dark), generates the colored Segmentation overlay on Dashboard, projects your local clouds onto the 3D Georeferenced Radar Map, and calculates the 3×3 sky regional grid.",
     "models.guide.seg.metrics":
       "val_miou (0→1, higher is better): overlap precision between predicted cloud masks and true masks. val_pixel_acc (0→1): % of sky pixels classified correctly. val_loss (lower is better).",
-    "models.guide.cls.title": "2. CloudTypeClassifier-Fusion (Cloud Genus)",
-    "models.guide.cls.badge": "Taxonomy · 11 Cloud Types",
+    "models.guide.cls.title": "2. CloudTypeClassifier-Fusion (11 Sky Classes)",
+    "models.guide.cls.badge": "Taxonomy · 11 Sky Classes (10 WMO Genera + Sky States)",
     "models.guide.cls.what":
       "Combines a CNN visual backbone (224×224 image) with 12 physical sky features (luminance L*, blue-sky index, texture contrast, cloud fractions) to recognize the meteorological cloud type among 11 classes (Clear, Cirrus, Cirrostratus, Cumulus, Stratocumulus, Stratus, Altocumulus, Altostratus, Cumulonimbus-like, Mixed, Hazy).",
     "models.guide.cls.use":
@@ -692,7 +693,7 @@ export const TRANSLATIONS: Record<Locale, Record<string, string>> = {
 
     "nav.overview": "Panoramica",
     "nav.vision": "Visione Live",
-    "nav.radar": "Mappa Radar",
+    "nav.radar": "Mappa Nubi",
     "nav.forecast": "Previsioni",
     "nav.trends": "Andamenti",
     "nav.timelapse": "Timelapse",
@@ -986,6 +987,7 @@ export const TRANSLATIONS: Record<Locale, Record<string, string>> = {
     "settings.src.web_stream": "Web Live Stream Pubblico (HLS .m3u8 / SkylineWebcams)",
     "settings.webStreamTosNotice": "Avviso: verifica di avere il diritto di utilizzare questo stream e di rispettare i Termini di Servizio del sito ospitante (es. SkylineWebcams).",
     "settings.src.webcam": "Webcam Locale / USB / Camera Virtuale",
+    "settings.src.allsky": "Cartella Locale AllSky (thomasjacquin/allsky / AllSkEye)",
     "settings.src.local": "Importazione Manuale Immagini/Video",
     "settings.src.demo": "Simulazione Demo (Cielo Sintetico di Test)",
     "settings.deviceIndexLabel": "Indice Dispositivo Video Locale (USB / Virtuale)",
@@ -1031,9 +1033,9 @@ export const TRANSLATIONS: Record<Locale, Record<string, string>> = {
     "mode.onlineBadge": "Modalità Ibrida · Locale + Open-Meteo",
     "mode.switchedOffline": "Attivata modalità 100% Solo Offline.",
     "mode.switchedOnline": "Attivata modalità Ibrida Online (Camera Locale + Open-Meteo + RainViewer).",
-    "radar.title": "Mappa Radar Nubi Georeferenziata",
+    "radar.title": "Mappa Proiezione Copertura Nuvolosa",
     "radar.subtitle":
-      "Posiziona il segnaposto sulla tua località per proiettare le nubi e il moto rilevati dalla camera sulla mappa.",
+      "Posiziona il segnaposto sulla tua località per proiettare le nubi osservate dalla camera sulla mappa insieme al radar precipitazioni RainViewer opzionale.",
     "radar.lat": "Latitudine",
     "radar.lon": "Longitudine",
     "radar.radiusKm": "Raggio (km)",

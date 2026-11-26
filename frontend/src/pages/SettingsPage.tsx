@@ -256,6 +256,7 @@ export const SettingsPage: React.FC<{
                   <option value="rtsp">{t("settings.src.rtsp")}</option>
                   <option value="web_stream">{t("settings.src.web_stream")}</option>
                   <option value="webcam_device">{t("settings.src.webcam")}</option>
+                  <option value="allsky_folder">{t("settings.src.allsky")}</option>
                   <option value="local_import">{t("settings.src.local")}</option>
                   <option value="demo_simulation">{t("settings.src.demo")}</option>
                 </select>
@@ -320,6 +321,85 @@ export const SettingsPage: React.FC<{
                 {cfg.camera.source_type === "web_stream" && (
                   <p className="text-[11px] text-amber-300/90 pt-1">{t("settings.webStreamTosNotice")}</p>
                 )}
+                <div className="flex flex-wrap items-center gap-1.5 pt-1.5">
+                  <span className="text-[10px] text-[#7C8596] font-mono">Presets:</span>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setCfg({
+                        ...cfg,
+                        camera: {
+                          ...cfg.camera,
+                          name: "Android IP Webcam",
+                          source_type: "http_snapshot",
+                          source_url: "http://192.168.1.50:8080/shot.jpg",
+                          capture_interval_seconds: 15,
+                          fov_horizontal_deg: 72,
+                        },
+                      })
+                    }
+                    className="px-2 py-0.5 rounded bg-white/[0.05] hover:bg-white/[0.1] border border-white/[0.08] text-[10px] font-mono text-[#C5CBD5]"
+                  >
+                    Android IP Webcam
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setCfg({
+                        ...cfg,
+                        camera: {
+                          ...cfg.camera,
+                          name: "ESP32-CAM Sky Node",
+                          source_type: "http_snapshot",
+                          source_url: "http://192.168.1.60/capture",
+                          capture_interval_seconds: 20,
+                          fov_horizontal_deg: 66,
+                        },
+                      })
+                    }
+                    className="px-2 py-0.5 rounded bg-white/[0.05] hover:bg-white/[0.1] border border-white/[0.08] text-[10px] font-mono text-[#C5CBD5]"
+                  >
+                    ESP32-CAM
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setCfg({
+                        ...cfg,
+                        camera: {
+                          ...cfg.camera,
+                          name: "Raspberry Pi Sky Cam",
+                          source_type: "rtsp",
+                          source_url: "rtsp://192.168.1.70:8554/cam",
+                          capture_interval_seconds: 15,
+                          fov_horizontal_deg: 120,
+                        },
+                      })
+                    }
+                    className="px-2 py-0.5 rounded bg-white/[0.05] hover:bg-white/[0.1] border border-white/[0.08] text-[10px] font-mono text-[#C5CBD5]"
+                  >
+                    Raspberry Pi Cam
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setCfg({
+                        ...cfg,
+                        camera: {
+                          ...cfg.camera,
+                          name: "AllSky Local Folder",
+                          source_type: "allsky_folder",
+                          source_url: "./data/allsky/current",
+                          capture_interval_seconds: 30,
+                          fov_horizontal_deg: 165,
+                        },
+                      })
+                    }
+                    className="px-2 py-0.5 rounded bg-white/[0.05] hover:bg-white/[0.1] border border-white/[0.08] text-[10px] font-mono text-[#C5CBD5]"
+                  >
+                    AllSky Folder
+                  </button>
+                </div>
               </label>
             )}
 
