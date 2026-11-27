@@ -136,6 +136,34 @@ export const SkyHorizonOverlay: React.FC<SkyHorizonOverlayProps> = ({
       .map((e) => sampleElevationCurve(e))
       .filter((c): c is NonNullable<typeof c> => c !== null);
 
+    // Vertical azimuth meridians every 15° (makes Horizontal FOV changes immediately visible on live photo)
+    const azStep = fovH > 110 ? 30 : 15;
+    const baseAzTick = Math.round(az / azStep) * azStep;
+    const halfSpanAz = Math.min(85, Math.ceil((fovH * 0.65) / azStep) * azStep);
+    const azCurves: { azNorm: number; label: string; path: string; topPt: [number, number] }[] = [];
+    for (let off = -halfSpanAz; off <= halfSpanAz; off += azStep) {
+      const targetAz = ((baseAzTick + off) % 360 + 360) % 360;
+      const pts: [number, number][] = [];
+      const minElSample = Math.max(-25, el - fovV * 0.7);
+      const maxElSample = Math.min(88, el + fovV * 0.7);
+      for (let s = 0; s <= 18; s++) {
+        const eVal = minElSample + ((maxElSample - minElSample) * s) / 18;
+        const p = projectSky(targetAz, eVal);
+        if (p) pts.push(p);
+      }
+      if (pts.length >= 2) {
+        const path = pts.map((p, idx) => `${idx === 0 ? "M" : "L"} ${p[0].toFixed(1)} ${p[1].toFixed(1)}`).join(" ");
+        const inViewTop = pts.find((p) => p[0] >= 36 && p[0] <= W - 36 && p[1] >= 18 && p[1] <= H - 30) || pts[pts.length - 1];
+        const card = CARDINALS.find((c) => c.az === targetAz);
+        azCurves.push({
+          azNorm: targetAz,
+          label: card ? `${card.label} ${targetAz}°` : `${targetAz}°`,
+          path,
+          topPt: inViewTop,
+        });
+      }
+    }
+
     const belowHorizonPoly = clipBelowHorizonBox();
 
     // Compass bearing markers at mid-frame or near horizon
@@ -158,7 +186,7 @@ export const SkyHorizonOverlay: React.FC<SkyHorizonOverlayProps> = ({
       }
     }
 
-    return { W, H, horizonCurve, belowHorizonPoly, elCurves, compassTicks, zenithPt, sunPt };
+    return { W, H, horizonCurve, belowHorizonPoly, elCurves, azCurves, compassTicks, zenithPt, sunPt };
   }, [azimuthDeg, elevationDeg, fovHorizontalDeg, fovVerticalDeg, rollDeg, solar]);
 
   const textHalo: React.CSSProperties = {
@@ -185,6 +213,34 @@ export const SkyHorizonOverlay: React.FC<SkyHorizonOverlayProps> = ({
       {overlay.belowHorizonPoly && (
         <polygon points={overlay.belowHorizonPoly} fill="url(#belowHorizonShadeGrad)" />
       )}
+
+      {/* Vertical Azimuth Meridians (reflects Horizontal FOV width directly on live frame) */}
+      {overlay.azCurves.map((m) => (
+        <g key={`az-${m.azNorm}`}>
+          <path
+            d={m.path}
+            fill="none"
+            stroke="#94A3B8"
+            strokeOpacity="0.34"
+            strokeWidth="1.2"
+            strokeDasharray="4 6"
+          />
+          {m.topPt[0] > 32 && m.topPt[0] < overlay.W - 32 && (
+            <text
+              x={m.topPt[0]}
+              y={22}
+              textAnchor="middle"
+              fill="#CBD5E1"
+              fontSize="11.5"
+              fontFamily="monospace"
+              fontWeight="600"
+              style={textHalo}
+            >
+              {m.label}
+            </text>
+          )}
+        </g>
+      ))}
 
       {/* Elevation angle curves (15°, 30°, 45°, 60°, 75°) */}
       {overlay.elCurves.map((c) => (
