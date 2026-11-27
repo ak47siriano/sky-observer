@@ -17,6 +17,8 @@
 [![Python 3.11+](https://img.shields.io/badge/Python-3.11%2B-3776AB?logo=python&logoColor=white)](pyproject.toml)
 [![Latest Release](https://img.shields.io/github/v/release/ak47siriano/sky-observer?include_prereleases)](https://github.com/ak47siriano/sky-observer/releases)
 
+**[English](README.md)** · **[Italiano](README.it.md)**
+
 </div>
 
 ---
@@ -178,18 +180,22 @@ rest:
 Optional **MQTT Auto-Discovery** can be enabled in `config/config.yaml` under `mqtt:` (`enabled: true`, `broker_host: <lan-broker>`) after installing `pip install -e ".[mqtt]"`.
 </details>
 
+### Prometheus Monitoring (`/metrics`)
+
+Sky Observer exposes a zero-dependency Prometheus scrape endpoint at `GET /metrics` (`sky_observer_up`, `sky_observer_camera_connected`, `sky_observer_observations_total`, `sky_observer_cloud_coverage_pct`, `sky_observer_quality_score`, `sky_observer_inference_ms`, `sky_observer_storage_used_mb`, `sky_observer_active_models_count`). When `SKYOBSERVER_API_TOKEN` is set, configure `authorization: { credentials: "<token>" }` in your Prometheus scrape job.
+
 ---
 
 ## Limitations
 
 Sky Observer is engineered to be transparent about single-camera physical boundaries:
 
-1. **Cloud-Base Height Uncertainty**: A single monocular camera cannot measure cloud altitude directly. Map projections rely on either user-configured height, Open-Meteo surface LCL (`125 * (T - Td)`, which assumes well-mixed convective boundary layers and fails for mid/high clouds or inversions), or visual class heuristics.
-2. **Horizon Projection Distortion (`tan(zenith)`)**: Ground distance grows rapidly near the horizon (`d = H * tan(zenith)`). Pixels beyond the configurable zenith cutoff (default `70 deg`) or below `0 deg` elevation are excluded from the projected cloud map, and opacity decays with zenith angle.
+1. **Cloud-Base Height Uncertainty**: A single monocular camera cannot measure cloud altitude directly. Map projections rely on either user-configured height, Open-Meteo surface LCL (`125 * (T - Td)`, which assumes well-mixed convective boundary layers and fails for mid/high clouds or inversions), or visual class heuristics. When two spatially separated cameras observe the same cloud feature, `POST /api/camera/stereo/triangulate` computes 3D stereo cloud-base altitude with ray-miss uncertainty bounds.
+2. **Horizon Projection Distortion (`tan(zenith)`)**: Ground distance grows rapidly near the horizon (`d = H * tan(zenith)`). Pixels beyond the configurable zenith cutoff (default `70 deg`, hard-capped at `75 deg` / `>= 15 deg` elevation) or below `0 deg` elevation are excluded from the projected cloud map, and opacity decays with zenith angle.
 3. **Narrow-FOV Nowcasting Horizons**: A standard ~70° smartphone lens sees only a narrow sky patch; clouds often cross the entire FOV in 5–15 minutes (`fov_exit_fraction`). Camera-only nowcasting is therefore capped at `+5/+15/+20 min` (and flagged `low_reliability` when skill does not beat persistence); `+30/+60 min` horizons appear only when optional Open-Meteo NWP is enabled.
-4. **11 Sky Classes vs. Official WMO Genera**: Official WMO taxonomy defines 10 cloud genera; Sky Observer's 11-class head mixes visual single-camera genera approximations with non-WMO sky states (`clear_sky`, `mixed_clouds`, `unknown`) plus optional tags (`contrails`, `rain`, `snow`, `fog`), and returns `unknown` when confidence is low.
-5. **Nighttime & Indoor Glass Limits**: Night cloud detection depends on local sky glow or star visibility and carries reduced forecast confidence. Indoor window setups are susceptible to interior reflections (`window_reflection` QC flag).
-6. **Auto-Train Drift Risk**: Unsupervised self-training can drift over time. Location Auto-Train mitigates this with a permanent fixed holdout manifest (`fixed_holdout.json`), QC artifact filtering, and a promotion gate that rejects regressing checkpoints.
+4. **Reduced Practical Taxonomy vs. Official WMO Genera**: Official WMO taxonomy defines 10 cloud genera that are visually ambiguous from a single ground camera. Sky Observer supports a **3-class segmentation projection** (`clear_sky` / `cloud` / `thick_cloud` + `255` non-sky exclusion) and a **5-class SWIMCAT-aligned macro cloud taxonomy** (`cumuliform_low`, `stratiform_low`, `mid_level`, `high_cirriform`, `convective_storm` + `clear_sky` / `unknown`) alongside detailed heuristic labels and optional sky-state tags (`contrails`, `rain`, `snow`, `fog`).
+5. **Nighttime, Lens Distortion & Smartphone AE/AWB Limits**: Night cloud detection depends on local sky glow or star visibility and carries reduced forecast confidence. Indoor window setups are susceptible to interior reflections (`window_reflection` QC flag). Smartphone auto-exposure/AWB shifts are damped via bounded radiometric normalization and optional Brown-Conrady lens undistortion (`lens_k1/k2/p1/p2`).
+6. **Auto-Train Drift Risk**: Unsupervised self-training can drift over time. Location Auto-Train enforces strict anti-drift rules: **golden-set frames are never included in training**, at most **50% of any training batch** may come from pseudo-labels, and new checkpoints are promoted only if they improve validation metrics without regressing beyond threshold (`max_category_regression`) in any sky-condition category.
 
 ---
 

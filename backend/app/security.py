@@ -95,7 +95,8 @@ class ApiTokenAuthMiddleware(BaseHTTPMiddleware):
 
     async def dispatch(self, request: Request, call_next):
         path = request.url.path
-        if not path.startswith("/api/") or path in PUBLIC_API_PATHS or request.method == "OPTIONS":
+        is_protected = path.startswith("/api/") or path == "/metrics"
+        if not is_protected or path in PUBLIC_API_PATHS or request.method == "OPTIONS":
             return await call_next(request)
 
         expected = get_configured_api_token()

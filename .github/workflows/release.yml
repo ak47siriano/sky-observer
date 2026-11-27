@@ -69,7 +69,27 @@ jobs:
             echo "has_notes=false" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Publish GitHub Release
+      - name: Package release archive & SHA-256 checksums
+        shell: bash
+        env:
+          TAG: ${{ steps.meta.outputs.tag }}
+        run: |
+          mkdir -p release_assets
+          ARCHIVE="release_assets/sky-observer-${TAG}.tar.gz"
+          git archive --format=tar.gz --prefix="sky-observer-${TAG}/" -o "$ARCHIVE" "$TAG"
+
+          # Include any versioned model weights placed under models/releases/ if present
+          if [ -d "models/releases" ]; then
+            find models/releases -maxdepth 2 -type f \( -name "*.pt" -o -name "*.pth" -o -name "*.onnx" \) -exec cp {} release_assets/ \;
+          fi
+
+          (
+            cd release_assets
+            sha256sum * > SHA256SUMS.txt
+          )
+          cat release_assets/SHA256SUMS.txt
+
+      - name: Publish GitHub Release & upload checksummed assets
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -93,3 +113,5 @@ jobs:
               gh release create "$TAG" --title "Sky Observer $TAG" --generate-notes "${FLAGS[@]}"
             fi
           fi
+
+          gh release upload "$TAG" release_assets/* --clobber

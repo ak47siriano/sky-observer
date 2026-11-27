@@ -2367,6 +2367,58 @@ def api_system_config_put(payload: dict[str, Any]) -> dict[str, Any]:
     return dumped
 
 
+@app.get("/metrics")
+def prometheus_metrics(db: Session = Depends(get_db)) -> Response:
+    """Zero-dependency Prometheus text-exposition metrics endpoint (protected by SKYOBSERVER_API_TOKEN when set)."""
+    cfg = get_config_manager().get()
+    cam_status = get_camera_manager().get_status()
+    cam_connected = 1 if cam_status.get("connected") else 0
+    obs_total = int(db.query(Observation).count())
+    latest = db.query(Observation).filter(Observation.is_usable.is_(True)).order_by(Observation.id.desc()).first()
+    active_models = int(db.query(ModelRegistry).filter(ModelRegistry.is_active.is_(True)).count())
+    try:
+        storage_mb = float(get_storage_stats(cfg).get("total_app_storage_mb", 0.0))
+    except Exception:
+        storage_mb = 0.0
+
+    cloud_cov = float(latest.cloud_coverage_pct) if latest and latest.cloud_coverage_pct is not None else -1.0
+    clear_sky = float(latest.clear_sky_pct) if latest and latest.clear_sky_pct is not None else -1.0
+    quality = float(latest.quality_score) if latest and latest.quality_score is not None else -1.0
+    infer_ms = float(latest.inference_duration_ms) if latest and latest.inference_duration_ms is not None else 0.0
+
+    lines = [
+        "# HELP sky_observer_up Sky Observer service availability (1 = up).",
+        "# TYPE sky_observer_up gauge",
+        "sky_observer_up 1",
+        "# HELP sky_observer_camera_connected Whether the configured primary camera is connected (1 = connected).",
+        "# TYPE sky_observer_camera_connected gauge",
+        f"sky_observer_camera_connected {cam_connected}",
+        "# HELP sky_observer_observations_total Total sky observations recorded in SQLite.",
+        "# TYPE sky_observer_observations_total counter",
+        f"sky_observer_observations_total {obs_total}",
+        "# HELP sky_observer_cloud_coverage_pct Latest usable cloud coverage percentage (-1 if unavailable).",
+        "# TYPE sky_observer_cloud_coverage_pct gauge",
+        f"sky_observer_cloud_coverage_pct {cloud_cov:.2f}",
+        "# HELP sky_observer_clear_sky_pct Latest usable clear sky percentage (-1 if unavailable).",
+        "# TYPE sky_observer_clear_sky_pct gauge",
+        f"sky_observer_clear_sky_pct {clear_sky:.2f}",
+        "# HELP sky_observer_quality_score Latest frame quality score 0-1 (-1 if unavailable).",
+        "# TYPE sky_observer_quality_score gauge",
+        f"sky_observer_quality_score {quality:.4f}",
+        "# HELP sky_observer_inference_ms Latest pipeline processing time in milliseconds.",
+        "# TYPE sky_observer_inference_ms gauge",
+        f"sky_observer_inference_ms {infer_ms:.2f}",
+        "# HELP sky_observer_storage_used_mb Total local Sky Observer data storage used in MB.",
+        "# TYPE sky_observer_storage_used_mb gauge",
+        f"sky_observer_storage_used_mb {storage_mb:.2f}",
+        "# HELP sky_observer_active_models_count Number of active neural models in the registry.",
+        "# TYPE sky_observer_active_models_count gauge",
+        f"sky_observer_active_models_count {active_models}",
+        "",
+    ]
+    return Response(content="\n".join(lines), media_type="text/plain; version=0.0.4; charset=utf-8")
+
+
 # =====================================================================
 # REAL-TIME WEBSOCKET
 # =====================================================================

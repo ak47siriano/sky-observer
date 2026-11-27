@@ -23,8 +23,34 @@ jobs:
           python -m pip install --upgrade pip
           pip install --index-url https://download.pytorch.org/whl/cpu torch torchvision
           pip install -r backend/requirements.txt
+          pip install mypy pip-audit
       - name: Lint with Ruff
-        run: ruff check backend/app/forecast/advection.py backend/app/vision/night.py backend/app/services/solar_pv.py backend/app/services/mqtt_ha.py scripts/evaluate.py scripts/evaluate_nowcast.py scripts/train_dinov3_probe.py
+        run: |
+          ruff check --ignore E501 \
+            backend/app/security.py \
+            backend/app/forecast/advection.py \
+            backend/app/vision/night.py \
+            backend/app/vision/color.py \
+            backend/app/services/solar_pv.py \
+            backend/app/services/mqtt_ha.py \
+            backend/app/services/metar.py \
+            backend/app/services/map_tiles.py \
+            scripts/evaluate.py \
+            scripts/evaluate_nowcast.py \
+            scripts/build_golden_set.py \
+            scripts/pseudo_label_webcam.py \
+            scripts/train_dinov3_probe.py
+      - name: Type-check core modules with mypy
+        env:
+          MYPYPATH: backend
+        run: |
+          mypy --ignore-missing-imports \
+            backend/app/security.py \
+            backend/app/services/metar.py \
+            backend/app/services/solar_pv.py
+      - name: Audit Python dependencies (pip-audit)
+        continue-on-error: true
+        run: pip-audit --requirement backend/requirements.txt --progress-spinner off
       - name: Run pytest suite
         env:
           PYTHONPATH: backend
@@ -35,13 +61,16 @@ jobs:
             backend/tests/test_vision.py \
             backend/tests/test_forecast_and_verification.py \
             backend/tests/test_radar_and_online_weather.py \
+            backend/tests/test_security_auth_and_quota.py \
             backend/tests/test_phase3_segmentation_and_antidrift.py \
+            backend/tests/test_phase3_eval_and_metar.py \
             backend/tests/test_phase4_qc_calibration_night.py \
+            backend/tests/test_phase4_models_and_stereo.py \
             backend/tests/test_phase5_solar_mqtt_skystate.py -q
-      - name: Run reproducible evaluation smoke check
+      - name: Run reproducible evaluation & metric regression gate
         env:
           PYTHONPATH: backend
-        run: python scripts/evaluate.py
+        run: python scripts/evaluate.py --min-seg-miou 0.80 --min-nowcast-skill 0.15
 
   frontend:
     runs-on: ubuntu-latest
@@ -52,10 +81,11 @@ jobs:
           node-version: "22"
           cache: npm
           cache-dependency-path: frontend/package-lock.json
-      - name: Install & build frontend
+      - name: Install, audit & build frontend
         working-directory: frontend
         run: |
           npm ci
+          npm audit --omit=dev --audit-level=high
           npx tsc --noEmit --noUnusedLocals --noUnusedParameters
           npm run build
 

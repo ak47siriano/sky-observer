@@ -116,3 +116,21 @@ def test_sky_state_solar_pv_api_mqtt_and_allsky_folder(isolated_env, tmp_path: P
         pv = r_pv.json()
         assert pv["available"] is True
         assert "clear_sky_ghi_wm2" in pv and "estimated_pv_kw" in pv
+
+        r_prom = client.get("/metrics")
+        assert r_prom.status_code == 200
+        assert "text/plain" in r_prom.headers["content-type"]
+        body = r_prom.text
+        assert "sky_observer_up 1" in body
+        assert "sky_observer_observations_total 1" in body
+        assert "sky_observer_cloud_coverage_pct" in body
+        assert "sky_observer_storage_used_mb" in body
+
+
+def test_prometheus_metrics_respects_api_token(isolated_env, monkeypatch):
+    monkeypatch.setenv("SKYOBSERVER_API_TOKEN", "prom-secret-99")
+    with TestClient(app) as client:
+        assert client.get("/metrics").status_code == 401
+        ok = client.get("/metrics", headers={"Authorization": "Bearer prom-secret-99"})
+        assert ok.status_code == 200
+        assert "sky_observer_up 1" in ok.text
