@@ -62,6 +62,10 @@ Choose one of these three HTTPS options for LAN mobile access:
 3. **`mkcert` Local CA**:
    - Generate locally trusted certificates (`mkcert -install && mkcert skyobserver.local <your-lan-ip>`) and mount them into Caddy or your existing Nginx/Traefik reverse proxy.
 
+### Offline Basemaps with Local PMTiles / Protomaps & Self-Hosted Radar (LibreWXR)
+- **Offline Basemaps (`PMTiles`)**: Bulk pre-caching tiles from public `tile.openstreetmap.org` servers violates OSMF Tile Usage Policy and is disabled. For 100% offline regional vector maps, extract your local area with the [Protomaps `pmtiles` CLI](https://docs.protomaps.com/pmtiles/cli) and drop the `.pmtiles` file into `data/map_tiles/` (e.g. `data/map_tiles/local.pmtiles`). Sky Observer automatically exposes it with HTTP `Range` support at `GET /api/map/pmtiles/local.pmtiles` (listed via `GET /api/map/pmtiles`).
+- **Precipitation Radar (`RainViewer` vs. Self-Hosted `LibreWXR`)**: RainViewer's free tier serves past radar frames only (2 h history, max zoom `7`, Universal Blue scheme). To replace it with a self-hosted **LibreWXR** tile server (or disable precipitation radar), set `online_weather.radar_provider: "librewxr"` and `online_weather.librewxr_tile_url` in `config/config.yaml`.
+
 ---
 
 ## 3. Direct Local Execution (Without Docker)

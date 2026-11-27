@@ -2022,6 +2022,65 @@ def api_secondary_camera_snapshot(cam_id: str) -> dict[str, Any]:
     }
 
 
+@app.get("/api/map/pmtiles")
+def api_map_pmtiles_list() -> dict[str, Any]:
+    """List locally installed PMTiles/Protomaps offline basemap archives."""
+    from app.services.map_tiles import list_local_pmtiles
+
+    cfg = get_config_manager().get()
+    archives = list_local_pmtiles(cfg)
+    return {"count": len(archives), "archives": archives}
+
+
+@app.get("/api/map/pmtiles/{filename}")
+def api_map_pmtiles_file(filename: str, request: Request) -> Response:
+    """Serve a local .pmtiles archive with HTTP Range support (206 Partial Content) for offline Protomaps."""
+    from app.services.map_tiles import resolve_pmtiles_path
+
+    cfg = get_config_manager().get()
+    try:
+        path = resolve_pmtiles_path(cfg, filename)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    file_size = path.stat().st_size
+    range_hdr = (request.headers.get("range") or "").strip()
+    if range_hdr.startswith("bytes="):
+        spec = range_hdr[6:].split(",", 1)[0].strip()
+        start_s, _, end_s = spec.partition("-")
+        try:
+            start = int(start_s) if start_s else 0
+            end = int(end_s) if end_s else file_size - 1
+        except ValueError as exc:
+            raise HTTPException(status_code=416, detail="Invalid Range header") from exc
+        if start < 0 or end < start or start >= file_size:
+            raise HTTPException(status_code=416, detail="Requested Range Not Satisfiable")
+        end = min(end, file_size - 1)
+        length = end - start + 1
+        with path.open("rb") as fh:
+            fh.seek(start)
+            chunk = fh.read(length)
+        return Response(
+            content=chunk,
+            status_code=206,
+            media_type="application/vnd.pmtiles",
+            headers={
+                "Content-Range": f"bytes {start}-{end}/{file_size}",
+                "Accept-Ranges": "bytes",
+                "Content-Length": str(length),
+                "Cache-Control": "public, max-age=86400",
+            },
+        )
+
+    return FileResponse(
+        str(path),
+        media_type="application/vnd.pmtiles",
+        headers={"Accept-Ranges": "bytes", "Cache-Control": "public, max-age=86400"},
+    )
+
+
 @app.get("/api/radar/tiles/{style}/{z}/{x}/{y}.png")
 def api_radar_tile(style: str, z: int, x: int, y: int):
     """Serve cached/local map tiles (zero outbound requests when offline_mode=True)."""

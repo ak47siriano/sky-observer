@@ -116,16 +116,21 @@ def get_storage_stats(config: AppConfig, db: Session | None = None) -> dict[str,
     }
 
 
-def apply_retention_policy(db: Session, config: AppConfig) -> dict[str, int]:
+def apply_retention_policy(db: Session, config: AppConfig) -> dict[str, Any]:
     """
-    Delete expired raw/processed/timelapse files according to configured retention days.
-    NEVER deletes images belonging to a training dataset or marked is_training_sample.
+    Delete expired raw/processed/timelapse files according to BOTH configured retention days
+    AND max_storage_gb disk quota.
+    NEVER deletes images belonging to a training dataset, marked is_training_sample, or default models.
     """
     now = datetime.now(UTC)
     protected_paths: set[str] = {
         str(Path(it.image_path).resolve())
         for it in db.query(DatasetItem.image_path).all()
         if it.image_path
+    } | {
+        str(Path(it.mask_path).resolve())
+        for it in db.query(DatasetItem.mask_path).all()
+        if it.mask_path
     }
 
     deleted_raw = 0
@@ -137,7 +142,8 @@ def apply_retention_policy(db: Session, config: AppConfig) -> dict[str, int]:
     ev_cutoff = now - timedelta(days=config.storage.event_retention_days)
     tl_cutoff = now - timedelta(days=config.storage.timelapse_retention_days)
 
-    for obs in db.query(Observation).all():
+    observations = db.query(Observation).order_by(Observation.captured_at.asc(), Observation.id.asc()).all()
+    for obs in observations:
         if obs.is_training_sample:
             continue
         ts = obs.captured_at
@@ -163,17 +169,103 @@ def apply_retention_policy(db: Session, config: AppConfig) -> dict[str, int]:
                         deleted_processed += 1
 
     if config.timelapse_dir.exists():
-        for vid in config.timelapse_dir.glob("*.mp4"):
+        for vid in sorted(config.timelapse_dir.glob("*.mp4"), key=lambda p: p.stat().st_mtime):
             mtime = datetime.fromtimestamp(vid.stat().st_mtime, tz=UTC)
             if mtime < tl_cutoff:
                 vid.unlink(missing_ok=True)
                 deleted_timelapse += 1
+
+    # Enforce max_storage_gb quota by pruning oldest non-training raw -> processed -> timelapse files
+    quota_bytes = int(float(config.storage.max_storage_gb) * (1024 ** 3))
+    target_bytes = int(quota_bytes * 0.95)
+    total_used_b = (
+        _dir_size_bytes(config.raw_images_dir)
+        + _dir_size_bytes(config.processed_images_dir)
+        + _dir_size_bytes(config.event_images_dir)
+        + _dir_size_bytes(config.timelapse_dir)
+        + _dir_size_bytes(config.datasets_dir)
+        + _dir_size_bytes(config.models_dir)
+        + _dir_size_bytes(config.data_dir / "map_tiles")
+        + _dir_size_bytes(config.data_dir / "masks")
+        + (config.db_path.stat().st_size if config.db_path.exists() else 0)
+    )
+
+    quota_enforced = False
+    quota_deleted_files = 0
+    if total_used_b > quota_bytes:
+        quota_enforced = True
+        # 1) Prune oldest non-training raw images from DB records
+        for obs in observations:
+            if total_used_b <= target_bytes:
+                break
+            if obs.is_training_sample or not obs.raw_path:
+                continue
+            rp = Path(obs.raw_path)
+            if rp.exists() and str(rp.resolve()) not in protected_paths:
+                fsize = rp.stat().st_size
+                rp.unlink(missing_ok=True)
+                obs.raw_path = ""
+                total_used_b = max(0, total_used_b - fsize)
+                deleted_raw += 1
+                quota_deleted_files += 1
+
+        # 2) Prune any orphaned raw files on disk not referenced in protected_paths
+        if total_used_b > target_bytes and config.raw_images_dir.exists():
+            raw_files = sorted(
+                (f for f in config.raw_images_dir.rglob("*") if f.is_file()),
+                key=lambda p: p.stat().st_mtime,
+            )
+            for f in raw_files:
+                if total_used_b <= target_bytes:
+                    break
+                if str(f.resolve()) in protected_paths:
+                    continue
+                fsize = f.stat().st_size
+                f.unlink(missing_ok=True)
+                total_used_b = max(0, total_used_b - fsize)
+                deleted_raw += 1
+                quota_deleted_files += 1
+
+        # 3) Prune oldest non-training processed overlays
+        if total_used_b > target_bytes:
+            for obs in observations:
+                if total_used_b <= target_bytes:
+                    break
+                if obs.is_training_sample:
+                    continue
+                for attr in ("motion_overlay_path", "seg_overlay_path", "seg_mask_path"):
+                    if total_used_b <= target_bytes:
+                        break
+                    p_str = getattr(obs, attr, "")
+                    if p_str:
+                        pp = Path(p_str)
+                        if pp.exists() and str(pp.resolve()) not in protected_paths:
+                            fsize = pp.stat().st_size
+                            pp.unlink(missing_ok=True)
+                            setattr(obs, attr, "")
+                            total_used_b = max(0, total_used_b - fsize)
+                            deleted_processed += 1
+                            quota_deleted_files += 1
+
+        # 4) Prune oldest timelapses if still over quota
+        if total_used_b > target_bytes and config.timelapse_dir.exists():
+            for vid in sorted(config.timelapse_dir.glob("*.mp4"), key=lambda p: p.stat().st_mtime):
+                if total_used_b <= target_bytes:
+                    break
+                fsize = vid.stat().st_size
+                vid.unlink(missing_ok=True)
+                total_used_b = max(0, total_used_b - fsize)
+                deleted_timelapse += 1
+                quota_deleted_files += 1
 
     db.commit()
     return {
         "deleted_raw": deleted_raw,
         "deleted_processed": deleted_processed,
         "deleted_timelapse": deleted_timelapse,
+        "quota_enforced": quota_enforced,
+        "quota_deleted_files": quota_deleted_files,
+        "storage_mb_after": round(total_used_b / (1024 ** 2), 2),
     }
 
 

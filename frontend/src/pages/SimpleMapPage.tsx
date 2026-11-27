@@ -221,11 +221,14 @@ export const SimpleMapPage: React.FC<SimpleMapPageProps> = ({ offlineMode, onTog
         map.removeLayer(rainLayerRef.current);
       }
       rainLayerRef.current = L.tileLayer(targetRainUrl, {
-        maxNativeZoom: 7,
+        maxNativeZoom: Number(state?.rainviewer?.max_zoom || 7),
         maxZoom: 18,
         opacity: 0.68,
         zIndex: 400,
-        attribution: "Weather data by RainViewer",
+        attribution:
+          state?.rainviewer?.attribution_url
+            ? `${state.rainviewer.attribution || "Weather data"} (<a href="${state.rainviewer.attribution_url}" target="_blank" rel="noopener noreferrer">${state.rainviewer.provider || "RainViewer"}</a>)`
+            : 'Weather data by <a href="https://www.rainviewer.com/api.html" target="_blank" rel="noopener noreferrer">RainViewer</a>',
       }).addTo(map);
       rainUrlRef.current = targetRainUrl;
     }

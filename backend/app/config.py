@@ -214,7 +214,7 @@ class StorageConfig(BaseModel):
     timelapse_retention_days: int = Field(default=60, ge=1, le=3650)
     event_retention_days: int = Field(default=90, ge=1, le=3650)
     training_retention_days: int = Field(default=3650, ge=30, le=36500)
-    max_storage_gb: float = Field(default=50.0, ge=1.0, le=10000.0)
+    max_storage_gb: float = Field(default=50.0, ge=0.001, le=10000.0)
     image_storage_enabled: bool = True
 
 
@@ -237,6 +237,8 @@ class OnlineWeatherConfig(BaseModel):
     cache_ttl_seconds: int = Field(default=300, ge=60, le=3600)
     fusion_weight_online: float = Field(default=0.40, ge=0.0, le=0.80)
     rainviewer_enabled: bool = True
+    radar_provider: Literal["rainviewer", "librewxr", "disabled"] = "rainviewer"
+    librewxr_tile_url: str = ""
 
 
 class SolarPVConfig(BaseModel):

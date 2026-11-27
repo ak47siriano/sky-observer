@@ -160,17 +160,49 @@ def get_tile_bytes(config: AppConfig, style: str, z: int, x: int, y: int) -> tup
     return _render_offline_fallback_tile(style, z, x, y)
 
 
+def list_local_pmtiles(config: AppConfig) -> list[dict[str, Any]]:
+    """List locally stored PMTiles/Protomaps vector archives inside data/map_tiles/."""
+    root = tile_dir(config)
+    if not root.exists():
+        return []
+    archives: list[dict[str, Any]] = []
+    for f in sorted(root.glob("*.pmtiles")):
+        if f.is_file():
+            archives.append({
+                "filename": f.name,
+                "size_mb": round(f.stat().st_size / (1024 * 1024), 2),
+                "url": f"/api/map/pmtiles/{f.name}",
+            })
+    return archives
+
+
+def resolve_pmtiles_path(config: AppConfig, filename: str) -> Path:
+    """Safely resolve a .pmtiles archive strictly inside data/map_tiles/ (no path traversal)."""
+    clean = Path(filename).name
+    if clean != filename or not clean.lower().endswith(".pmtiles"):
+        raise ValueError("Invalid PMTiles archive filename.")
+    root = tile_dir(config).resolve()
+    cand = (root / clean).resolve()
+    if cand.parent != root or not cand.exists() or not cand.is_file():
+        raise FileNotFoundError(f"PMTiles archive not found: {clean}")
+    return cand
+
+
 def get_tile_cache_stats(config: AppConfig) -> dict[str, Any]:
     root = tile_dir(config)
     if not root.exists():
-        return {"cached_tiles": 0, "size_mb": 0.0}
+        return {"cached_tiles": 0, "size_mb": 0.0, "pmtiles_archives": []}
     count = 0
     total_bytes = 0
     for f in root.rglob("*"):
         if f.is_file() and f.suffix.lower() in {".png", ".jpg"}:
             count += 1
             total_bytes += f.stat().st_size
-    return {"cached_tiles": count, "size_mb": round(total_bytes / (1024 * 1024), 2)}
+    return {
+        "cached_tiles": count,
+        "size_mb": round(total_bytes / (1024 * 1024), 2),
+        "pmtiles_archives": list_local_pmtiles(config),
+    }
 
 
 def prefetch_tiles_around(
@@ -181,46 +213,24 @@ def prefetch_tiles_around(
     zooms: list[int] | None = None,
     radius_tiles: int = 1,
 ) -> dict[str, Any]:
+    """
+    Bulk pre-caching from public tile.openstreetmap.org / Esri tile servers violates upstream
+    Tile Usage Policies and has been disabled. Use a local Protomaps/PMTiles extract inside
+    data/map_tiles/<region>.pmtiles served via GET /api/map/pmtiles/<region>.pmtiles instead.
+    """
     if config.server.offline_mode:
         raise PermissionError("Cannot download map tiles while Offline Only mode is active.")
 
-    target_styles = [s for s in (styles or ["dark_base", "dark_ref", "osm"]) if s in TILE_PROVIDERS]
-    target_zooms = sorted({int(z) for z in (zooms or [6, 7, 8, 9, 10, 11, 12]) if 1 <= int(z) <= 16})
-    root = tile_dir(config)
-
-    newly_cached = 0
-    already_cached = 0
-    failed = 0
-
-    with httpx.Client(timeout=8.0, headers=_HTTP_HEADERS) as client:
-        for style in target_styles:
-            url_tpl, _mime, ext = TILE_PROVIDERS[style]
-            for z in target_zooms:
-                cx, cy = latlon_to_tile(lat, lon, z)
-                limit = 1 << z
-                for dx in range(-radius_tiles, radius_tiles + 1):
-                    for dy in range(-radius_tiles, radius_tiles + 1):
-                        tx, ty = cx + dx, cy + dy
-                        if tx < 0 or tx >= limit or ty < 0 or ty >= limit:
-                            continue
-                        if _find_cached_file(root, style, z, tx, ty) is not None:
-                            already_cached += 1
-                            continue
-                        try:
-                            resp = client.get(url_tpl.format(z=z, x=tx, y=ty))
-                            if resp.status_code == 200 and len(resp.content) > 100:
-                                out_file = root / style / str(z) / str(tx) / f"{ty}.{ext}"
-                                out_file.parent.mkdir(parents=True, exist_ok=True)
-                                out_file.write_bytes(resp.content)
-                                newly_cached += 1
-                            else:
-                                failed += 1
-                        except Exception:
-                            failed += 1
-
+    _ = (lat, lon, styles, zooms, radius_tiles)
     return {
-        "cached": newly_cached,
-        "already_cached": already_cached,
-        "failed": failed,
+        "cached": 0,
+        "already_cached": 0,
+        "failed": 0,
+        "bulk_prefetch_disabled": True,
+        "reason": (
+            "Bulk tile pre-caching from public OSM/Esri servers is disabled to respect Tile Usage Policies. "
+            "For full offline basemaps, place a regional Protomaps .pmtiles extract in data/map_tiles/ "
+            "and access it via /api/map/pmtiles/<name>.pmtiles."
+        ),
         "tile_cache": get_tile_cache_stats(config),
     }

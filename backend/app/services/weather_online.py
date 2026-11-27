@@ -323,9 +323,35 @@ class OnlineWeatherService:
             return []
 
     def get_radar_layers(self, config: AppConfig) -> dict[str, Any] | None:
-        """Fetch RainViewer public radar tile frames (free, no registration)."""
-        if config.server.offline_mode or not config.online_weather.rainviewer_enabled:
+        """
+        Fetch precipitation radar tile frames (RainViewer free tier: past radar only, max zoom 7,
+        Universal Blue color scheme, dynamic hash paths, or optional self-hosted LibreWXR tile URL).
+        """
+        if config.server.offline_mode:
             return None
+        provider_mode = getattr(config.online_weather, "radar_provider", "rainviewer")
+        if provider_mode == "disabled" or not config.online_weather.rainviewer_enabled:
+            return None
+
+        if provider_mode == "librewxr":
+            tile_tpl = (getattr(config.online_weather, "librewxr_tile_url", "") or "").strip()
+            if not tile_tpl:
+                return None
+            return {
+                "provider": "LibreWXR (Self-Hosted)",
+                "attribution": "Weather radar via LibreWXR",
+                "attribution_url": "https://github.com/librewxr/librewxr",
+                "max_zoom": 10,
+                "generated": int(time.time()),
+                "radar_frames": [
+                    {
+                        "time": int(time.time()),
+                        "kind": "radar_past",
+                        "tile_url": tile_tpl,
+                    }
+                ],
+                "satellite_frames": [],
+            }
 
         now = time.time()
         with self._lock:
@@ -333,15 +359,15 @@ class OnlineWeatherService:
                 return self._radar_cache[1]
 
         try:
-            with httpx.Client(timeout=7.0) as client:
+            with httpx.Client(timeout=7.0, headers=_REVERSE_HEADERS) as client:
                 resp = client.get(RAINVIEWER_MAPS_URL)
                 resp.raise_for_status()
                 data = resp.json()
 
             host = data.get("host", "https://tilecache.rainviewer.com")
+            # RainViewer free tier provides past radar frames only (2h window, max zoom 7,
+            # Universal Blue scheme = 2, dynamic hash paths); nowcast & satellite IR are discontinued.
             past = data.get("radar", {}).get("past", []) or []
-            nowcast = data.get("radar", {}).get("nowcast", []) or []
-            sat_ir = data.get("satellite", {}).get("infrared", []) or []
 
             frames = []
             for item in past[-8:]:
@@ -352,30 +378,15 @@ class OnlineWeatherService:
                         "kind": "radar_past",
                         "tile_url": f"{host}{path}/256/{{z}}/{{x}}/{{y}}/2/1_1.png",
                     })
-            for item in nowcast[:4]:
-                path = item.get("path", "")
-                if path:
-                    frames.append({
-                        "time": item.get("time"),
-                        "kind": "radar_nowcast",
-                        "tile_url": f"{host}{path}/256/{{z}}/{{x}}/{{y}}/2/1_1.png",
-                    })
-
-            sat_frames = []
-            for item in sat_ir[-4:]:
-                path = item.get("path", "")
-                if path:
-                    sat_frames.append({
-                        "time": item.get("time"),
-                        "tile_url": f"{host}{path}/256/{{z}}/{{x}}/{{y}}/0/0_0.png",
-                    })
 
             out = {
                 "provider": "RainViewer",
                 "attribution": "Weather data by RainViewer",
+                "attribution_url": "https://www.rainviewer.com/api.html",
+                "max_zoom": 7,
                 "generated": data.get("generated"),
                 "radar_frames": frames,
-                "satellite_frames": sat_frames,
+                "satellite_frames": [],
             }
             with self._lock:
                 self._radar_cache = (now, out)
