@@ -8,8 +8,8 @@
 
 ## 2. GPU Not Detected / Running in `CPU FALLBACK`
 - Confirm NVIDIA drivers and `nvidia-smi` work on the host.
-- For Docker on Linux/WSL2, ensure `nvidia-container-toolkit` is installed and start with:
-  `docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d`
+- For Docker on Linux/WSL2, ensure `nvidia-container-toolkit` is installed and rebuild with CUDA wheels:
+  `docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d --build`
 - Check `/api/system/gpu` to inspect `cuda_available` and VRAM limits.
 
 ## 3. Out of VRAM During Training (8 GB GPU)

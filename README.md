@@ -62,12 +62,29 @@
 
 ## Quick Start
 
-### Option 1: Docker Compose (Recommended, Slim CPU Image)
+Sky Observer ships with a **single unified `Dockerfile`** (FastAPI serves the pre-built React PWA directly on port **`8080`**), **CPU-only PyTorch wheels** by default, and **Offline-First mode enabled by default (`SKYOBSERVER_OFFLINE_MODE=true`)** with zero outbound requests unless you opt into Hybrid Mode (`SKYOBSERVER_OFFLINE_MODE=false` in `.env` or via the in-app toggle).
+
+### Option 1: Docker Compose (Recommended, Unified Slim CPU Image)
 ```bash
 cp .env.example .env
 docker compose up -d --build
 ```
-Open **`http://localhost:8080`**.
+Open **`http://localhost:8080`** (bound to `127.0.0.1` by default).
+
+- **Standard compose camera sources**: supports **network sources only** (`http_snapshot` / IP Webcam, `mjpeg_stream`, `rtsp`, `web_stream`, or a mounted `allsky_folder`).
+- **Linux USB / Iriun webcam passthrough**:
+  ```bash
+  docker compose -f docker-compose.yml -f docker-compose.usb.yml up -d
+  ```
+  *(On Windows/macOS, Docker Desktop does not pass `/dev/video*` natively — use a network stream or Option 2/3 below.)*
+- **NVIDIA GPU (CUDA 12.4 wheels)**:
+  ```bash
+  docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d --build
+  ```
+- **LAN & Mobile PWA over HTTPS**: Service Workers and iOS/Android PWA installation require HTTPS on non-localhost IP addresses. Set `SKYOBSERVER_HOST=0.0.0.0` and `SKYOBSERVER_LAN_HOST=<your-lan-ip>` in `.env` *(enable API token authentication before exposing on a shared LAN)* and start with Caddy HTTPS (or use **mkcert** / **Tailscale**, see [`docs/INSTALLATION.md`](docs/INSTALLATION.md)):
+  ```bash
+  docker compose -f docker-compose.yml -f docker-compose.https.yml up -d
+  ```
 
 ### Option 2: Native Local Setup (Linux / macOS — Bash)
 ```bash

@@ -13,23 +13,54 @@
 
 ---
 
-## 2. Docker Deployment (Recommended, Slim CPU Image)
+## 2. Docker Deployment (Recommended, Single Unified Dockerfile)
 
-The default `Dockerfile` installs **CPU-only PyTorch wheels** (`--index-url https://download.pytorch.org/whl/cpu`) and runs as a non-root user (`skyobserver`) with healthcheck on `http://127.0.0.1:8080/api/health`.
+Sky Observer uses **one unified multi-stage root [`Dockerfile`](../Dockerfile)** (stage 1 compiles the React PWA with Node 22; stage 2 runs FastAPI + Uvicorn as non-root user `skyobserver`, serving both the API and `frontend/dist` on port **`8080`**).
 
-### CPU-Only Mode (Linux / macOS / Windows Docker Desktop)
+- **Offline-first by default**: `.env.example` and `docker-compose.yml` set `SKYOBSERVER_OFFLINE_MODE=true` (zero outbound weather/radar traffic). Change `SKYOBSERVER_OFFLINE_MODE=false` in `.env` (or toggle Online/Hybrid inside the UI) to enable Open-Meteo / RainViewer.
+- **Persistent volumes**: `docker-compose.yml` persists `db`, `images`, `models`, `datasets`, `timelapse`, `map_tiles`, `masks`, and `./config`.
+- **Loopback by default**: port publishing uses `${SKYOBSERVER_HOST:-127.0.0.1}:${SKYOBSERVER_PORT:-8080}:8080`. Only switch `SKYOBSERVER_HOST=0.0.0.0` on a trusted private LAN **after enabling API token authentication** (see [SECURITY.md](../SECURITY.md)).
+
+### CPU-Only Mode (Default — Linux / macOS / Windows Docker Desktop)
+Installs slim **CPU-only PyTorch wheels** (`--index-url https://download.pytorch.org/whl/cpu`):
 ```bash
 cp .env.example .env
 docker compose up -d --build
 ```
+Open **`http://localhost:8080`**.
 
 ### NVIDIA GPU Accelerated Mode (Linux / WSL2 + NVIDIA Container Toolkit)
+Overrides `PYTORCH_INDEX_URL` to install CUDA 12.4 PyTorch wheels and reserves the NVIDIA GPU:
 ```bash
 cp .env.example .env
 docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d --build
 ```
 
-Open **`http://localhost:8080`**.
+### USB Webcams / Iriun in Docker (Linux Only)
+The standard `docker-compose.yml` supports **network camera sources only** (`http_snapshot` / Android IP Webcam, `mjpeg_stream`, `rtsp`, `web_stream`, or a mounted `allsky_folder`).
+
+- **Linux hosts**: pass `/dev/video0` (or set `SKYOBSERVER_VIDEO_DEVICE` in `.env`) using `docker-compose.usb.yml`:
+  ```bash
+  docker compose -f docker-compose.yml -f docker-compose.usb.yml up -d
+  ```
+- **Windows / macOS**: Docker Desktop does not natively pass USB webcams into Linux containers. Use a network camera feed (e.g. Android IP Webcam / RTSP) or run Sky Observer natively (Section 3).
+
+### Installing the PWA Over LAN (HTTPS Requirement)
+Browsers (and especially **iOS Safari**) only register Service Workers and allow **Add to Home Screen (PWA)** on `localhost` or **HTTPS** origins — plain `http://192.168.x.x:8080` will NOT install as a PWA.
+
+Choose one of these three HTTPS options for LAN mobile access:
+
+1. **Built-in Caddy HTTPS Override (`docker-compose.https.yml`)**:
+   - In `.env`, set `SKYOBSERVER_HOST=0.0.0.0` and `SKYOBSERVER_LAN_HOST=<your-lan-ip-or-hostname>` (enable API auth first).
+   - Start with:
+     ```bash
+     docker compose -f docker-compose.yml -f docker-compose.https.yml up -d
+     ```
+   - Open `https://<your-lan-ip>:8443` and import Caddy's local root CA certificate (`caddy_data/caddy/pki/authorities/local/root.crt`) on your phone so iOS/Android trusts the local HTTPS certificate.
+2. **Tailscale (`tailscale serve`) — Easiest Zero-Certificate Option**:
+   - Keep `SKYOBSERVER_HOST=127.0.0.1` (never even exposed on LAN) and run `tailscale serve --bg 8080` on the host. Tailscale provides automatic trusted Let's Encrypt HTTPS (`https://<machine>.<tailnet>.ts.net`) with built-in WireGuard authentication.
+3. **`mkcert` Local CA**:
+   - Generate locally trusted certificates (`mkcert -install && mkcert skyobserver.local <your-lan-ip>`) and mount them into Caddy or your existing Nginx/Traefik reverse proxy.
 
 ---
 

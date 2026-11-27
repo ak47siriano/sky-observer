@@ -8,8 +8,8 @@ If you discover a security vulnerability in **Sky Observer**, please report it p
 ## Network Exposure & Deployment Guidance
 Sky Observer is designed as a **local-first, self-hosted** observatory without built-in multi-user authentication:
 
-1. **Localhost by default**: `config/config.yaml` and `docker-compose.yml` bind to `127.0.0.1` (`http://127.0.0.1:8080`) by default.
-2. **LAN access**: If you want to view the PWA from your phone on your home Wi-Fi, bind explicitly using `SKYOBS_HOST=0.0.0.0` (or `--host 0.0.0.0`) only on a **trusted private LAN**.
+1. **Localhost by default**: `config/config.yaml`, `.env.example`, `docker-compose.yml`, and `docker-compose.hub.yml` bind to `127.0.0.1` (`http://127.0.0.1:8080`) by default.
+2. **LAN access**: If you want to view the PWA from your phone on your home Wi-Fi, set `SKYOBSERVER_HOST=0.0.0.0` in `.env` (or `--host 0.0.0.0` natively) only on a **trusted private LAN** and pair with API token authentication (and HTTPS via `docker-compose.https.yml` / Tailscale for PWA install).
 3. **Do NOT expose Sky Observer directly to the public internet**: Always place it behind a VPN (e.g., Tailscale / WireGuard) or an HTTPS reverse proxy (Caddy, Nginx, Traefik) with authentication (e.g., Basic Auth, Authelia, Cloudflare Access) if remote access is required.
 
 ---
