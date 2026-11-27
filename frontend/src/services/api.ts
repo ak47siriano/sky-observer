@@ -137,6 +137,11 @@ export const api = {
   deleteEvent: (id: number) => request<any>(`/api/events/${id}`, { method: "DELETE" }),
   clearEvents: (scope: "pending" | "rejected" | "all" | "duplicates") =>
     request<any>("/api/events/clear", { method: "POST", body: JSON.stringify({ scope }) }),
+  reportMissedEvent: (payload: { event_type: string; note?: string; observation_id?: number }) =>
+    request<any>("/api/events/report-missed", { method: "POST", body: JSON.stringify(payload) }),
+  getActiveLearningQueue: (limit = 20) => request<any>(`/api/dataset/active-learning?limit=${limit}`),
+  getMetarVerification: (icao?: string) =>
+    request<any>(`/api/verification/metar${icao ? `?icao=${encodeURIComponent(icao)}` : ""}`),
   updateEventsConfig: (cfg: Record<string, any>) =>
     request<any>("/api/events/config", { method: "PUT", body: JSON.stringify(cfg) }),
 

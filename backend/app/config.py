@@ -230,6 +230,13 @@ class EventsConfig(BaseModel):
     rejected_backoff_minutes: int = Field(default=60, ge=5, le=1440)
     camera_movement_enabled: bool = True
     browser_notifications_enabled: bool = False
+    # Objective future-window ground-truth event definitions (for honest verification & evaluation)
+    objective_rapid_increase_pts: float = Field(default=30.0, ge=5.0, le=90.0)
+    objective_rapid_increase_window_min: int = Field(default=30, ge=5, le=180)
+    objective_clearing_max_pct: float = Field(default=20.0, ge=0.0, le=60.0)
+    objective_clearing_duration_min: int = Field(default=15, ge=5, le=120)
+    objective_darkening_delta: float = Field(default=-15.0, ge=-80.0, le=-3.0)
+    objective_darkening_max_solar_delta_deg: float = Field(default=8.0, ge=1.0, le=30.0)
 
 
 class OnlineWeatherConfig(BaseModel):

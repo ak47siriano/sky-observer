@@ -21,7 +21,45 @@ Sky Observer includes metadata and format adapters for the following verified sc
 - **Model weights fine-tuned on third-party datasets or built atop third-party backbones (e.g., DINOv3) may inherit upstream license restrictions.** Do not redistribute trained weights without verifying compatibility with the upstream dataset and backbone license terms directly at each source repository.
 - For an overview of 72 open-source sky image datasets, see Nie et al. (*arXiv:2211.14709*). Note that most public benchmarks use professional all-sky fisheye cameras; always evaluate final accuracy on frames captured with your target low-cost camera (smartphone, USB webcam, ESP32-CAM).
 
-## 2. Supported Local Directory Formats (`POST /api/dataset/import`)
+## 2. Public Dataset Usage & Class-by-Class Conversion Tables
+
+Different public datasets have incompatible label taxonomies. **Never mix incompatible labels without explicit mapping**; classes that cannot be mapped cleanly are **excluded**.
+
+### A. Segmentation Datasets (`SWIMSEG`, `SWINSEG`, `SWINySEG`, `WSISEG`)
+- **SWIMSEG / SWINSEG / SWINySEG**: **Binary only** (`sky` vs `cloud`). Use strictly for **pre-training** and **public binary segmentation benchmarks** (never fabricate thin/dense/dark sub-classes from binary masks).
+- **Reduced 3-Class Local Target** (`clear_sky=0`, `cloud=1`, `thick_cloud=2`, plus `excluded=255` obstacle mask):
+
+| Source Dataset | Source Label / Value | Target 3-Class Index | Target Name | Usage Role |
+| :--- | :--- | :---: | :--- | :--- |
+| **SWIMSEG / SWINySEG / SWINSEG** | `0` (Sky) | `0` | `clear_sky` | Binary pre-training & public test |
+| **SWIMSEG / SWINySEG / SWINSEG** | `255` (Cloud) | `1` (binary cloud) | `cloud` (binary) | Binary pre-training & public test |
+| **WSISEG** | Clear Sky | `0` | `clear_sky` | 3-class pre-training & test |
+| **WSISEG** | Cloud | `1` / `2` | `cloud` / `thick_cloud` | 3-class pre-training & test |
+| **WSISEG** | Non-sky / Horizon mask | `255` | `excluded` (ignore) | Obstacle ignore index |
+| **Sky Observer 5-class internal** | `0` (`clear_sky`) | `0` | `clear_sky` | Direct |
+| **Sky Observer 5-class internal** | `1` (`thin_cloud`) | `1` | `cloud` | Direct |
+| **Sky Observer 5-class internal** | `2` (`dense_cloud`) & `3` (`dark_cloud`) | `2` | `thick_cloud` | Merged thick/dark deck |
+| **Sky Observer 5-class internal** | `4` (`sun_glare`) / obstacles | `255` | `excluded` | Excluded from cloud cover |
+
+### B. Classification Datasets (`SWIMCAT` Preferred vs `CCSN` Pre-Training Only)
+- **SWIMCAT (5 categories)** is **preferred over CCSN** for simplified ground-camera macro classification because its 5 patch classes match single-camera visual separability.
+- **CCSN (11 folders)** is used **for pre-training genera representations only**; non-WMO classes such as `contrails` are **excluded** from cloud-genus classification (handled as optional visual tags instead).
+
+| Source Dataset | Source Class | Target 5-Class Macro Category | Included? |
+| :--- | :--- | :--- | :---: |
+| **SWIMCAT** | `A — Clear Sky` | `clear_sky` | Yes |
+| **SWIMCAT** | `B — Patterned Clouds` | `cumuliform_low` | Yes |
+| **SWIMCAT** | `C — Thick Dark Clouds` | `convective_storm` | Yes |
+| **SWIMCAT** | `D — Thick White Clouds` | `stratiform_low` | Yes |
+| **SWIMCAT** | `E — Veil Clouds` | `high_cirriform` | Yes |
+| **CCSN** | `Cu` (Cumulus), `Sc` (Stratocumulus) | `cumuliform_low` | Pre-train only |
+| **CCSN** | `St` (Stratus), `Ns` (Nimbostratus) | `stratiform_low` | Pre-train only |
+| **CCSN** | `Ac` (Altocumulus), `As` (Altostratus) | `mid_level` | Pre-train only |
+| **CCSN** | `Ci` (Cirrus), `Cc` (Cirrocumulus), `Cs` (Cirrostratus) | `high_cirriform` | Pre-train only |
+| **CCSN** | `Cb` (Cumulonimbus) | `convective_storm` | Pre-train only |
+| **CCSN** | `Ct` (Contrails) | — *(visual tag only, not a WMO genus)* | **Excluded** |
+
+## 3. Supported Local Directory Formats (`POST /api/dataset/import`)
 1. **Paired Images + Masks**:
    ```text
    my_dataset/

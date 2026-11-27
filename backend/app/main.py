@@ -945,6 +945,82 @@ def api_dataset_list(db: Session = Depends(get_db)) -> dict[str, Any]:
     return {"datasets": summaries, "public_catalog": PUBLIC_DATASET_CATALOG}
 
 
+@app.get("/api/dataset/active-learning")
+def api_dataset_active_learning(
+    limit: int = Query(20, ge=1, le=100),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Propose unlabeled local observations with highest model uncertainty for active-learning annotation."""
+    labeled_obs_ids = {
+        int(row[0])
+        for row in db.query(DatasetItem.observation_id)
+        .filter(DatasetItem.observation_id.isnot(None))
+        .all()
+    }
+    candidates = (
+        db.query(Observation)
+        .filter(Observation.is_usable.is_(True), Observation.raw_path != "")
+        .order_by(Observation.id.desc())
+        .limit(400)
+        .all()
+    )
+    scored: list[tuple[float, Observation]] = []
+    for obs in candidates:
+        if obs.id in labeled_obs_ids:
+            continue
+        if not Path(obs.raw_path).exists():
+            continue
+        q_meta = safe_json_loads(obs.quality_metrics_json, {})
+        probs_map = safe_json_loads(getattr(obs, "classification_probs_json", None), {})
+        cov_meta = safe_json_loads(obs.coverage_metrics_json, {})
+        entropy = float(q_meta.get("uncertainty_entropy") or 0.0)
+        if entropy <= 0.0 and isinstance(probs_map, dict) and len(probs_map) > 1:
+            vals = [max(1e-9, float(v)) for v in probs_map.values() if isinstance(v, (int, float))]
+            s_v = sum(vals)
+            if s_v > 0:
+                norm_p = [v / s_v for v in vals]
+                entropy = float(-sum(p * np.log(p) for p in norm_p) / max(1e-9, np.log(len(norm_p))))
+        cls_conf = float(obs.classification_confidence or 0.5)
+        seg_conf = float(cov_meta.get("mean_confidence") or getattr(obs, "quality_score", 0.7) or 0.7)
+        uncertainty_score = round(
+            min(1.0, max(0.0, 0.45 * entropy + 0.35 * (1.0 - cls_conf) + 0.20 * (1.0 - seg_conf))),
+            4,
+        )
+        scored.append((uncertainty_score, obs))
+    scored.sort(key=lambda pair: pair[0], reverse=True)
+    items = [
+        {
+            "observation_id": obs.id,
+            "captured_at": obs.captured_at.isoformat() if obs.captured_at else None,
+            "uncertainty_score": score,
+            "cloud_coverage_pct": obs.cloud_coverage_pct,
+            "dominant_cloud_type": obs.dominant_cloud_type,
+            "classification_confidence": obs.classification_confidence,
+            "quality_score": obs.quality_score,
+            "raw_url": f"/api/analysis/image/raw?observation_id={obs.id}",
+        }
+        for score, obs in scored[:limit]
+    ]
+    return {"count": len(items), "items": items}
+
+
+@app.get("/api/verification/metar")
+def api_verification_metar(
+    icao: str | None = Query(default=None, max_length=8),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Compare latest camera cloud cover & estimated cloud base against nearest airport METAR / ceilometer."""
+    from app.services.metar import compare_observation_with_metar, fetch_nearest_metar
+
+    cfg = get_config_manager().get()
+    metar = fetch_nearest_metar(cfg.camera.latitude, cfg.camera.longitude, cfg, icao=icao)
+    obs = db.query(Observation).filter(Observation.is_usable.is_(True)).order_by(Observation.id.desc()).first()
+    if obs is None:
+        return {"comparable": False, "reason": "No usable observation available", "metar": metar}
+    est_base = cfg.camera.assumed_cloud_altitude_m or _estimate_cloud_altitude_from_observation(obs)
+    return compare_observation_with_metar(float(obs.cloud_coverage_pct or 0.0), est_base, metar)
+
+
 @app.get("/api/dataset/{dataset_id}/items")
 def api_dataset_items(dataset_id: int, limit: int = Query(100, ge=1, le=500), db: Session = Depends(get_db)) -> dict[str, Any]:
     items = db.query(DatasetItem).filter(DatasetItem.dataset_id == dataset_id).limit(limit).all()

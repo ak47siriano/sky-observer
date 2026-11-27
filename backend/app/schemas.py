@@ -154,6 +154,21 @@ class EventFeedbackRequest(BaseModel):
     note: str = Field(default="", max_length=500)
 
 
+class MissedEventReportRequest(BaseModel):
+    event_type: Literal[
+        "rapid_cloud_increase",
+        "sky_clearing",
+        "rapid_darkening",
+        "storm_like_development",
+        "dense_cloud_arrival",
+        "rain_or_precipitation",
+        "unusual_change",
+    ] = "rapid_cloud_increase"
+    note: str = Field(default="", max_length=500)
+    observation_id: int | None = None
+    occurred_at: str | None = None
+
+
 class AutoTrainConfigRequest(BaseModel):
     enabled: bool | None = None
     interval_minutes: int | None = Field(default=None, ge=5, le=1440)

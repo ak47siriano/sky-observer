@@ -400,3 +400,131 @@ def record_operational_alert(
     db.commit()
     db.refresh(ev)
     return ev
+
+
+def evaluate_objective_future_events(
+    observations: list[Observation],
+    config: AppConfig,
+) -> list[dict[str, Any]]:
+    """
+    Compute objective future-window ground-truth events over a chronological sequence of observations:
+      - rapid_increase: cloud cover rises >= objective_rapid_increase_pts within window_min
+      - clearing: cloud cover remains < objective_clearing_max_pct for at least clearing_duration_min
+      - darkening: luminance drops <= objective_darkening_delta at comparable solar elevation
+    """
+    from app.vision.geometry import compute_solar_position
+
+    def _sol_el(dt_utc: datetime) -> float:
+        sp = compute_solar_position(lat, lon, dt_utc)
+        return float(sp["elevation_deg"] if isinstance(sp, dict) else getattr(sp, "elevation_deg", 0.0))
+
+    usable = [o for o in observations if getattr(o, "is_usable", True) and o.captured_at is not None]
+    usable.sort(key=lambda o: (_normalize_utc(o.captured_at), o.id or 0))
+    ev_cfg = config.events
+    lat = float(config.camera.latitude)
+    lon = float(config.camera.longitude)
+
+    inc_pts = float(ev_cfg.objective_rapid_increase_pts)
+    inc_win_s = float(ev_cfg.objective_rapid_increase_window_min) * 60.0
+    clr_max = float(ev_cfg.objective_clearing_max_pct)
+    clr_dur_s = float(ev_cfg.objective_clearing_duration_min) * 60.0
+    dark_delta = float(ev_cfg.objective_darkening_delta)
+    max_sol_delta = float(ev_cfg.objective_darkening_max_solar_delta_deg)
+
+    results: list[dict[str, Any]] = []
+    for i, obs in enumerate(usable):
+        t0 = _normalize_utc(obs.captured_at)
+        c0 = float(obs.cloud_coverage_pct or 0.0)
+        l0 = float(obs.avg_luminance or 0.0)
+        sol0 = _sol_el(t0)
+
+        # Look ahead within the future window
+        future_inc: list[Observation] = []
+        future_clr: list[Observation] = []
+        for nxt in usable[i + 1 :]:
+            dt_s = (_normalize_utc(nxt.captured_at) - t0).total_seconds()
+            if dt_s <= 0:
+                continue
+            if dt_s <= inc_win_s:
+                future_inc.append(nxt)
+            if dt_s <= max(clr_dur_s, inc_win_s):
+                future_clr.append(nxt)
+            else:
+                break
+
+        rapid_increase = any(
+            (float(f.cloud_coverage_pct or 0.0) - c0) >= inc_pts for f in future_inc
+        )
+
+        # Clearing: current or future transitions into < clr_max and stays < clr_max for >= clr_dur_s
+        clearing = False
+        if future_clr:
+            low_span_start: datetime | None = t0 if c0 < clr_max else None
+            for f in future_clr:
+                tf = _normalize_utc(f.captured_at)
+                if float(f.cloud_coverage_pct or 0.0) < clr_max:
+                    if low_span_start is None:
+                        low_span_start = tf
+                    elif (tf - low_span_start).total_seconds() >= clr_dur_s:
+                        clearing = True
+                        break
+                else:
+                    low_span_start = None
+
+        # Darkening at comparable solar elevation (excludes normal sunset darkening)
+        darkening = False
+        for f in future_inc:
+            tf = _normalize_utc(f.captured_at)
+            sol_f = _sol_el(tf)
+            if abs(sol_f - sol0) <= max_sol_delta and (float(f.avg_luminance or 0.0) - l0) <= dark_delta:
+                darkening = True
+                break
+
+        results.append({
+            "observation_id": obs.id,
+            "captured_at": t0.isoformat(),
+            "rapid_increase": rapid_increase,
+            "clearing": clearing,
+            "darkening": darkening,
+        })
+    return results
+
+
+def report_missed_event(
+    db: Session,
+    event_type: str,
+    note: str = "",
+    observation_id: int | None = None,
+    occurred_at: datetime | None = None,
+) -> EventAlert:
+    """Record a user-reported missed event (false negative) as a confirmed EventAlert."""
+    target_obs: Observation | None = None
+    if observation_id is not None:
+        target_obs = db.query(Observation).filter(Observation.id == observation_id).first()
+    else:
+        target_obs = db.query(Observation).order_by(Observation.id.desc()).first()
+
+    now = _normalize_utc(occurred_at) if occurred_at is not None else datetime.now(UTC)
+    label = event_type.replace("_", " ").title()
+    ev = EventAlert(
+        created_at=now,
+        event_type=event_type,
+        severity="warning",
+        title=f"User-Reported Missed Event: {label}",
+        description=note.strip() or f"User reported an undetected '{event_type}' sky event.",
+        observation_id=target_obs.id if target_obs is not None else None,
+        metrics_json=json.dumps({
+            "source": "user_reported_missed",
+            "false_negative": True,
+            "reported_at": datetime.now(UTC).isoformat(),
+        }),
+        acknowledged=True,
+        user_status="confirmed",
+        user_note=note.strip(),
+    )
+    db.add(ev)
+    if target_obs is not None:
+        target_obs.is_event_snapshot = True
+    db.commit()
+    db.refresh(ev)
+    return ev

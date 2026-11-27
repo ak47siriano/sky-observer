@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { Bell, Check, Image, RotateCcw, Save, Sparkles, Trash2, X } from "lucide-react";
+import { AlertCircle, Bell, Check, Image, RotateCcw, Save, Sparkles, Trash2, X } from "lucide-react";
 import { useI18n } from "../i18n/I18nContext";
 import { api } from "../services/api";
 import type { EventAlert } from "../types/api";
@@ -20,6 +20,10 @@ export const EventsPage: React.FC<{ events: EventAlert[]; onRefresh: () => void 
   const [busyId, setBusyId] = useState<number | null>(null);
   const [clearing, setClearing] = useState(false);
   const [previewObsId, setPreviewObsId] = useState<Record<number, boolean>>({});
+  const [showMissedForm, setShowMissedForm] = useState(false);
+  const [missedType, setMissedType] = useState("rapid_cloud_increase");
+  const [missedNote, setMissedNote] = useState("");
+  const [submittingMissed, setSubmittingMissed] = useState(false);
 
   useEffect(() => {
     api.getSystemConfig().then((c) => setCfg(c.events)).catch(() => {});
@@ -58,6 +62,21 @@ export const EventsPage: React.FC<{ events: EventAlert[]; onRefresh: () => void 
     }
   };
 
+  const handleReportMissed = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setSubmittingMissed(true);
+    try {
+      await api.reportMissedEvent({ event_type: missedType, note: missedNote });
+      setMissedNote("");
+      setShowMissedForm(false);
+      setClearMsg(t("events.reportMissedSaved"));
+      onRefresh();
+      window.setTimeout(() => setClearMsg(""), 3500);
+    } finally {
+      setSubmittingMissed(false);
+    }
+  };
+
   const togglePreview = (id: number) => {
     setPreviewObsId((prev) => ({ ...prev, [id]: !prev[id] }));
   };
@@ -92,6 +111,13 @@ export const EventsPage: React.FC<{ events: EventAlert[]; onRefresh: () => void 
 
           <div className="flex flex-wrap items-center gap-1.5 text-xs">
             {clearMsg && <span className="text-emerald-400 font-mono mr-1">{clearMsg}</span>}
+            <button
+              type="button"
+              onClick={() => setShowMissedForm((v) => !v)}
+              className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-amber-500/15 hover:bg-amber-500/25 border border-amber-400/35 text-amber-200 font-medium transition"
+            >
+              <AlertCircle className="w-3 h-3" /> {t("events.reportMissedBtn")}
+            </button>
             {events.length > 0 && (
               <>
                 <button
@@ -144,6 +170,50 @@ export const EventsPage: React.FC<{ events: EventAlert[]; onRefresh: () => void 
             )}
           </div>
         </div>
+
+        {showMissedForm && (
+          <form onSubmit={handleReportMissed} className="obs-inset p-3.5 space-y-2.5 border border-amber-400/25">
+            <div className="text-xs font-semibold text-amber-200">{t("events.reportMissedTitle")}</div>
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 text-xs">
+              <select
+                value={missedType}
+                onChange={(e) => setMissedType(e.target.value)}
+                className="obs-input"
+              >
+                <option value="rapid_cloud_increase">Rapid cloud increase (+30% / 30m)</option>
+                <option value="sky_clearing">Sky clearing (&lt;20% / 15m)</option>
+                <option value="rapid_darkening">Rapid sky darkening</option>
+                <option value="storm_like_development">Storm / dark cloud cell</option>
+                <option value="dense_cloud_arrival">Dense cloud arrival</option>
+                <option value="rain_or_precipitation">Rain / precipitation</option>
+                <option value="unusual_change">Other / unusual sky change</option>
+              </select>
+              <input
+                type="text"
+                value={missedNote}
+                onChange={(e) => setMissedNote(e.target.value)}
+                placeholder={t("events.reportMissedNotePh")}
+                className="obs-input sm:col-span-2"
+              />
+            </div>
+            <div className="flex items-center justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setShowMissedForm(false)}
+                className="obs-btn-secondary px-3 py-1 text-xs"
+              >
+                {t("timelapse.cancelBtn")}
+              </button>
+              <button
+                type="submit"
+                disabled={submittingMissed}
+                className="obs-btn-primary px-3 py-1 text-xs"
+              >
+                {t("events.reportMissedSubmit")}
+              </button>
+            </div>
+          </form>
+        )}
 
         <div className="inline-flex flex-wrap gap-1 bg-[#0B0C0E] border border-white/[0.07] rounded-xl p-1">
           {(

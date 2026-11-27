@@ -16,7 +16,8 @@ from app.database import get_db
 from app.forecast.advection import advect_cloud_mask_optical_flow, render_advected_probability_png
 from app.forecast.verification import compute_verification_summary
 from app.models_db import EventAlert, Forecast, Observation, safe_json_loads
-from app.schemas import EventFeedbackRequest, EventsClearRequest
+from app.schemas import EventFeedbackRequest, EventsClearRequest, MissedEventReportRequest
+from app.services.events import report_missed_event
 from app.vision.masking import build_valid_sky_mask_from_config
 
 router = APIRouter()
@@ -222,6 +223,25 @@ def api_event_feedback(event_id: int, req: EventFeedbackRequest, db: Session = D
     if not ev:
         raise HTTPException(status_code=404, detail="Event not found")
     return apply_event_feedback(db, ev, req.status, req.note)
+
+
+@router.post("/api/events/report-missed")
+def api_events_report_missed(req: MissedEventReportRequest, db: Session = Depends(get_db)) -> dict[str, Any]:
+    """Allow users to report a sky event that occurred but was missed by automated rules (false negative)."""
+    occ_dt: datetime | None = None
+    if req.occurred_at:
+        try:
+            occ_dt = datetime.fromisoformat(req.occurred_at.replace("Z", "+00:00"))
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail="Invalid ISO-8601 occurred_at timestamp") from exc
+    ev = report_missed_event(
+        db=db,
+        event_type=req.event_type,
+        note=req.note,
+        observation_id=req.observation_id,
+        occurred_at=occ_dt,
+    )
+    return event_to_dict(ev)
 
 
 @router.delete("/api/events/{event_id}")
