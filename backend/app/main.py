@@ -14,10 +14,11 @@ from typing import Any
 
 import cv2
 import numpy as np
-from fastapi import Depends, FastAPI, File, HTTPException, Query, UploadFile, WebSocket, WebSocketDisconnect
+from fastapi import Depends, FastAPI, File, HTTPException, Query, Request, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
+from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from app import __version__
@@ -191,6 +192,12 @@ async def lifespan(_app: FastAPI):
 
 from app.routers.forecast_events import router as forecast_events_router
 from app.routers.timelapse_analytics import router as timelapse_analytics_router
+from app.security import (
+    ApiTokenAuthMiddleware,
+    extract_token_from_request_parts,
+    get_configured_api_token,
+    is_valid_api_token,
+)
 
 app = FastAPI(
     title="Sky Observer API",
@@ -199,6 +206,7 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+app.add_middleware(ApiTokenAuthMiddleware)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=get_config_manager().get().server.cors_origins,
@@ -208,6 +216,16 @@ app.add_middleware(
 )
 app.include_router(forecast_events_router)
 app.include_router(timelapse_analytics_router)
+
+
+@app.get("/api/auth/status")
+def api_auth_status(request: Request) -> dict[str, Any]:
+    expected = get_configured_api_token()
+    presented = extract_token_from_request_parts(request.headers, request.query_params)
+    return {
+        "auth_required": bool(expected),
+        "authenticated": is_valid_api_token(presented, expected),
+    }
 
 
 def _encode_jpeg_response(img_bgr: np.ndarray, quality: int = 88) -> Response:
@@ -1250,6 +1268,17 @@ def api_system_storage_cleanup(db: Session = Depends(get_db)) -> dict[str, Any]:
     return {"cleanup": res, "storage": get_storage_stats(cfg, db=db)}
 
 
+@app.post("/api/system/storage/vacuum")
+def api_system_storage_vacuum(db: Session = Depends(get_db)) -> dict[str, Any]:
+    """Run SQLite VACUUM to reclaim freed database pages cleanly."""
+    cfg = get_config_manager().get()
+    db.commit()
+    bind = db.get_bind()
+    with bind.connect().execution_options(isolation_level="AUTOCOMMIT") as conn:
+        conn.execute(text("VACUUM"))
+    return {"vacuumed": True, "storage": get_storage_stats(cfg, db=db)}
+
+
 @app.post("/api/system/storage/purge")
 def api_system_storage_purge(req: DataPurgeRequest, db: Session = Depends(get_db)) -> dict[str, Any]:
     """Granular or full-system reset of images, observations, forecasts, events, datasets, models & config."""
@@ -2188,6 +2217,12 @@ def api_system_config_put(payload: dict[str, Any]) -> dict[str, Any]:
 
 @app.websocket("/ws/live")
 async def websocket_live(ws: WebSocket) -> None:
+    expected = get_configured_api_token()
+    if expected:
+        presented = extract_token_from_request_parts(ws.headers, ws.query_params)
+        if not is_valid_api_token(presented, expected):
+            await ws.close(code=1008, reason="Unauthorized")
+            return
     await ws.accept()
     hub = get_broadcaster()
     hub.register(ws)

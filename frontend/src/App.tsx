@@ -16,7 +16,7 @@ import {
 import { ManualModal } from "./components/ManualModal";
 import { SetupWizardModal } from "./components/SetupWizardModal";
 import { useI18n } from "./i18n/I18nContext";
-import { api } from "./services/api";
+import { api, getApiToken, setApiToken } from "./services/api";
 import type { EventAlert, ForecastItem, Observation, SystemStatus } from "./types/api";
 import { AiStudioPage } from "./pages/AiStudioPage";
 import { AnalyticsPage } from "./pages/AnalyticsPage";
@@ -76,6 +76,9 @@ export function App() {
   const [manualOpen, setManualOpen] = useState(false);
   const [wizardOpen, setWizardOpen] = useState(false);
   const [wizardAutoDismissed, setWizardAutoDismissed] = useState(false);
+  const [authLocked, setAuthLocked] = useState(false);
+  const [tokenDraft, setTokenDraft] = useState("");
+  const [authErr, setAuthErr] = useState("");
   const [utcTime, setUtcTime] = useState<string>(() => new Date().toISOString().slice(11, 19));
 
   const switchUiMode = (next: UiMode) => {
@@ -171,8 +174,10 @@ export function App() {
     const connectWs = () => {
       if (disposed) return;
       const proto = window.location.protocol === "https:" ? "wss" : "ws";
+      const tok = getApiToken();
+      const wsQuery = tok ? `?token=${encodeURIComponent(tok)}` : "";
       try {
-        ws = new WebSocket(`${proto}://${window.location.host}/ws/live`);
+        ws = new WebSocket(`${proto}://${window.location.host}/ws/live${wsQuery}`);
         ws.onopen = () => {
           wsConnected = true;
         };
@@ -260,6 +265,35 @@ export function App() {
     }
   };
 
+  useEffect(() => {
+    api
+      .getAuthStatus()
+      .then((st) => {
+        setAuthLocked(Boolean(st.auth_required && !st.authenticated));
+      })
+      .catch(() => {});
+  }, []);
+
+  const handleUnlockToken = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setAuthErr("");
+    setApiToken(tokenDraft);
+    try {
+      const st = await api.getAuthStatus();
+      if (st.authenticated) {
+        setAuthLocked(false);
+        setTokenDraft("");
+        await refreshAll();
+      } else {
+        setApiToken("");
+        setAuthErr("Invalid API token.");
+      }
+    } catch {
+      setApiToken("");
+      setAuthErr("Authentication check failed.");
+    }
+  };
+
   const unackCount = events.filter(
     (e) => (e.user_status ?? (e.acknowledged ? "confirmed" : "pending")) === "pending"
   ).length;
@@ -268,6 +302,35 @@ export function App() {
 
   return (
     <div className="min-h-screen text-[#ECEFF4] flex flex-col pb-16 sm:pb-0">
+      {authLocked && (
+        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
+          <form
+            onSubmit={handleUnlockToken}
+            className="w-full max-w-sm rounded-xl border border-[#343B48] bg-[#15181E] p-6 space-y-4 shadow-2xl"
+          >
+            <div className="flex items-center gap-2.5">
+              <Lock className="w-5 h-5 text-sky-400" />
+              <h2 className="text-base font-semibold text-white">Sky Observer API Token</h2>
+            </div>
+            <p className="text-xs text-[#8D96A5]">
+              This instance enforces <code className="font-mono text-sky-300">SKYOBSERVER_API_TOKEN</code>. Enter your
+              token to unlock the dashboard and live WebSocket stream.
+            </p>
+            <input
+              type="password"
+              value={tokenDraft}
+              onChange={(e) => setTokenDraft(e.target.value)}
+              placeholder="Paste SKYOBSERVER_API_TOKEN"
+              required
+              className="obs-input w-full text-sm font-mono"
+            />
+            {authErr && <div className="text-xs text-rose-400">{authErr}</div>}
+            <button type="submit" className="obs-btn-primary w-full py-2 text-sm">
+              Unlock Observatory
+            </button>
+          </form>
+        </div>
+      )}
       {/* Top Bar — Shared Brand + Always-Visible [ Simple | Expert ] Switch */}
       <header className="sticky top-0 z-40 border-b border-[#262B34] bg-[#15181E]">
         <div className="max-w-[1800px] w-full mx-auto px-3 sm:px-4 h-14 py-2 flex items-center justify-between gap-3">

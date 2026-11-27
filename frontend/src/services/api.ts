@@ -1,10 +1,41 @@
+const API_TOKEN_STORAGE_KEY = "sky_observer_api_token";
+
+export function getApiToken(): string {
+  try {
+    return (window.localStorage.getItem(API_TOKEN_STORAGE_KEY) || "").trim();
+  } catch {
+    return "";
+  }
+}
+
+export function setApiToken(token: string): void {
+  try {
+    const clean = token.trim();
+    if (clean) window.localStorage.setItem(API_TOKEN_STORAGE_KEY, clean);
+    else window.localStorage.removeItem(API_TOKEN_STORAGE_KEY);
+  } catch {
+    // ignore storage errors
+  }
+}
+
+export function withApiTokenQuery(url: string): string {
+  const token = getApiToken();
+  if (!token) return url;
+  const sep = url.includes("?") ? "&" : "?";
+  return `${url}${sep}token=${encodeURIComponent(token)}`;
+}
+
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
+  const token = getApiToken();
+  const method = (init?.method || "GET").toUpperCase();
   const res = await fetch(url, {
+    ...init,
     headers: {
       ...(init?.body instanceof FormData ? {} : { "Content-Type": "application/json" }),
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      ...(method !== "GET" && method !== "HEAD" ? { "X-Confirm-Action": "confirm" } : {}),
       ...(init?.headers || {}),
     },
-    ...init,
   });
   if (!res.ok) {
     let msg = `HTTP ${res.status}`;
@@ -20,6 +51,7 @@ async function request<T>(url: string, init?: RequestInit): Promise<T> {
 }
 
 export const api = {
+  getAuthStatus: () => request<{ auth_required: boolean; authenticated: boolean }>("/api/auth/status"),
   getSystemStatus: () => request<any>("/api/system/status"),
   getSystemConfig: () => request<any>("/api/system/config"),
   updateSystemConfig: (patch: Record<string, any>) =>

@@ -28,6 +28,33 @@ _ALLOWED_CAMERA_SCHEMES: dict[str, set[str]] = {
     "web_stream": {"http", "https"},
     "rtsp": {"rtsp", "rtsps", "http", "https"},
 }
+MAX_SNAPSHOT_BYTES = 16 * 1024 * 1024  # 16 MiB cap on HTTP camera/web_stream fetches
+MAX_HTTP_TIMEOUT_S = 30.0
+
+
+def _get_source_allowlist() -> list[str]:
+    raw = (os.environ.get("SKYOBSERVER_SOURCE_ALLOWLIST") or "").strip()
+    if not raw:
+        return []
+    return [entry.strip().lower() for entry in raw.split(",") if entry.strip()]
+
+
+def _host_matches_allowlist(
+    host: str,
+    resolved_ips: set[str],
+    allowlist: list[str],
+) -> bool:
+    for entry in allowlist:
+        if entry == host or (entry.startswith(".") and host.endswith(entry)) or host.endswith(f".{entry}"):
+            return True
+        try:
+            net = ipaddress.ip_network(entry, strict=False)
+            for ip_s in resolved_ips:
+                if ipaddress.ip_address(ip_s) in net:
+                    return True
+        except ValueError:
+            continue
+    return False
 
 
 def mask_url_credentials(url: str) -> str:
@@ -101,7 +128,8 @@ def validate_camera_source_url(
         raise ValueError("Camera source_url is missing a valid hostname.")
 
     allow_priv = _resolve_allow_private_sources(source_type, allow_private)
-    if not allow_priv and host in {"localhost", "localhost.localdomain"}:
+    allowlist = _get_source_allowlist()
+    if not allow_priv and not allowlist and host in {"localhost", "localhost.localdomain"}:
         raise ValueError("Loopback host 'localhost' is blocked for web_stream sources.")
 
     try:
@@ -110,7 +138,11 @@ def validate_camera_source_url(
         ip_direct = None
 
     if ip_direct is not None:
-        _check_ip_allowed(ip_direct, allow_priv)
+        resolved_ips = {str(ip_direct)}
+        explicitly_allowed = bool(allowlist and _host_matches_allowlist(host, resolved_ips, allowlist))
+        if allowlist and not explicitly_allowed:
+            raise ValueError(f"Camera host '{host}' is not in SKYOBSERVER_SOURCE_ALLOWLIST.")
+        _check_ip_allowed(ip_direct, allow_priv or explicitly_allowed)
         return clean_url
 
     try:
@@ -119,7 +151,7 @@ def validate_camera_source_url(
     except socket.gaierror as exc:
         raise ValueError(f"Unable to resolve camera host '{host}'") from exc
 
-    resolved_ips: set[str] = set()
+    resolved_ips = set()
     for info in infos:
         sockaddr = info[4]
         if sockaddr and sockaddr[0]:
@@ -127,8 +159,14 @@ def validate_camera_source_url(
     if not resolved_ips:
         raise ValueError(f"No IP addresses resolved for host '{host}'")
 
+    explicitly_allowed = bool(allowlist and _host_matches_allowlist(host, resolved_ips, allowlist))
+    if allowlist and not explicitly_allowed:
+        raise ValueError(f"Camera host '{host}' is not in SKYOBSERVER_SOURCE_ALLOWLIST.")
+    if not (allow_priv or explicitly_allowed) and host in {"localhost", "localhost.localdomain"}:
+        raise ValueError("Loopback host 'localhost' is blocked for web_stream sources.")
+
     for ip_str in resolved_ips:
-        _check_ip_allowed(ipaddress.ip_address(ip_str), allow_priv)
+        _check_ip_allowed(ipaddress.ip_address(ip_str), allow_priv or explicitly_allowed)
     return clean_url
 
 
@@ -202,18 +240,37 @@ class CameraManager:
         return img
 
     def _safe_http_get(
-        self, url: str, timeout: float, source_type: str, headers: dict[str, str] | None = None
+        self,
+        url: str,
+        timeout: float,
+        source_type: str,
+        headers: dict[str, str] | None = None,
+        max_bytes: int = MAX_SNAPSHOT_BYTES,
     ) -> httpx.Response:
         current_url = validate_camera_source_url(url, source_type=source_type)
-        with httpx.Client(timeout=timeout, follow_redirects=False, headers=headers) as client:
+        clamped_timeout = max(1.0, min(float(timeout), MAX_HTTP_TIMEOUT_S))
+        with httpx.Client(timeout=clamped_timeout, follow_redirects=False, headers=headers) as client:
             for _ in range(4):
-                resp = client.get(current_url)
-                if resp.status_code in {301, 302, 303, 307, 308} and resp.headers.get("location"):
-                    next_url = urljoin(current_url, resp.headers["location"])
-                    current_url = validate_camera_source_url(next_url, source_type=source_type)
-                    continue
-                resp.raise_for_status()
-                return resp
+                with client.stream("GET", current_url) as resp:
+                    if resp.status_code in {301, 302, 303, 307, 308} and resp.headers.get("location"):
+                        next_url = urljoin(current_url, resp.headers["location"])
+                        current_url = validate_camera_source_url(next_url, source_type=source_type)
+                        continue
+                    resp.raise_for_status()
+                    cl_hdr = resp.headers.get("content-length")
+                    if cl_hdr and cl_hdr.isdigit() and int(cl_hdr) > max_bytes:
+                        raise ValueError(f"Remote response exceeds maximum allowed size ({max_bytes} bytes).")
+                    buf = bytearray()
+                    for chunk in resp.iter_bytes(chunk_size=32768):
+                        buf.extend(chunk)
+                        if len(buf) > max_bytes:
+                            raise ValueError(f"Remote response exceeded maximum allowed size ({max_bytes} bytes).")
+                    return httpx.Response(
+                        status_code=resp.status_code,
+                        headers=resp.headers,
+                        content=bytes(buf),
+                        request=resp.request,
+                    )
         raise ConnectionError("Too many HTTP redirects while fetching camera frame.")
 
     def _capture_http_snapshot(self, url: str, timeout: float, source_type: str = "http_snapshot") -> np.ndarray:
