@@ -80,6 +80,49 @@ def group_wmo_label(label: str) -> str:
     return WMO_TO_GROUPED_MAP.get(str(label or "").lower().strip(), "low_stratiform")
 
 
+# SWIMCAT-aligned 5-class macro cloud taxonomy (plus clear_sky & unknown)
+MACRO_CLOUD_CLASSES_5 = (
+    "clear_sky",
+    "cumuliform_low",
+    "stratiform_low",
+    "mid_level",
+    "high_cirriform",
+    "convective_storm",
+)
+
+_TO_MACRO_5_MAP: dict[str, str] = {
+    "clear_sky": "clear_sky",
+    "cumulus": "cumuliform_low",
+    "low_cumuliform": "cumuliform_low",
+    "cumuliform_low": "cumuliform_low",
+    "stratus": "stratiform_low",
+    "stratocumulus": "stratiform_low",
+    "nimbostratus": "stratiform_low",
+    "mixed_clouds": "stratiform_low",
+    "low_stratiform": "stratiform_low",
+    "stratiform_low": "stratiform_low",
+    "altocumulus": "mid_level",
+    "altostratus": "mid_level",
+    "mid_alto": "mid_level",
+    "mid_level": "mid_level",
+    "cirrus": "high_cirriform",
+    "cirrostratus": "high_cirriform",
+    "cirrocumulus": "high_cirriform",
+    "high_cirriform": "high_cirriform",
+    "cumulonimbus": "convective_storm",
+    "cumulonimbus_like": "convective_storm",
+    "convective_storm": "convective_storm",
+}
+
+
+def map_to_macro_cloud_class(label: str) -> str:
+    """Map any fine-grained WMO genus or grouped label into the 5-class SWIMCAT-aligned macro taxonomy."""
+    key = str(label or "").lower().strip()
+    if key == "unknown":
+        return "unknown"
+    return _TO_MACRO_5_MAP.get(key, "stratiform_low")
+
+
 def _extract_feature_vector(
     coverage_metrics: dict[str, Any],
     color_metrics: dict[str, Any],
@@ -303,6 +346,7 @@ def classify_cloud_type(
 
     return {
         "dominant_cloud_type": dominant,
+        "macro_cloud_class": map_to_macro_cloud_class(dominant),
         "is_uncertain": dominant == "unknown",
         "sky_state_tags": sky_tags,
         "confidence": round(confidence, 4),

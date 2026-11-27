@@ -2049,6 +2049,28 @@ def api_secondary_cameras_put(req: SecondaryCamerasUpdateRequest) -> dict[str, A
     return {"cameras": out_cams}
 
 
+@app.post("/api/camera/stereo/triangulate")
+def api_camera_stereo_triangulate(payload: dict[str, Any]) -> dict[str, Any]:
+    """Triangulate cloud-base altitude (m) from two spatially separated sky cameras viewing the same cloud feature."""
+    from app.vision.geometry import triangulate_cloud_base_altitude_m
+
+    try:
+        return triangulate_cloud_base_altitude_m(
+            cam1_lat=float(payload["cam1_lat"]),
+            cam1_lon=float(payload["cam1_lon"]),
+            el1_deg=float(payload["el1_deg"]),
+            az1_deg=float(payload["az1_deg"]),
+            cam2_lat=float(payload["cam2_lat"]),
+            cam2_lon=float(payload["cam2_lon"]),
+            el2_deg=float(payload["el2_deg"]),
+            az2_deg=float(payload["az2_deg"]),
+            cam1_alt_m=float(payload.get("cam1_alt_m", 0.0)),
+            cam2_alt_m=float(payload.get("cam2_alt_m", 0.0)),
+        )
+    except (KeyError, TypeError, ValueError) as exc:
+        raise HTTPException(status_code=422, detail=f"Invalid stereo geometry payload: {exc}") from exc
+
+
 @app.post("/api/cameras/secondary/{cam_id}/snapshot")
 def api_secondary_camera_snapshot(cam_id: str) -> dict[str, Any]:
     """Capture & segment one frame from a secondary camera and cache its mask for 360° Radar Fusion."""

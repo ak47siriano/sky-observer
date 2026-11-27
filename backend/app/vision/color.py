@@ -27,6 +27,70 @@ def _estimate_cct_kelvin(mean_r: float, mean_g: float, mean_b: float) -> float:
     return float(max(2000.0, min(15000.0, cct)))
 
 
+def normalize_ae_awb_bgr(
+    image_bgr: np.ndarray,
+    valid_mask: np.ndarray | None = None,
+    target_p85_luma: float = 175.0,
+) -> tuple[np.ndarray, dict[str, float]]:
+    """
+    Bounded smartphone AE/AWB normalization for radiometric stability:
+    - Uses neutral/brightest low-saturation cloud pixels (if present) or clamped shades-of-gray
+      gains in [0.75, 1.35] so blue sky hue is preserved while AWB shifts are damped.
+    - Applies bounded luminance scaling in [0.70, 1.40] so auto-exposure jumps do not corrupt
+      radiometric features.
+    """
+    img_f = image_bgr.astype(np.float32)
+    mask = (
+        (valid_mask > 0)
+        if (valid_mask is not None and valid_mask.shape[:2] == image_bgr.shape[:2])
+        else np.ones(image_bgr.shape[:2], dtype=bool)
+    )
+    if int(mask.sum()) < 20:
+        mask = np.ones(image_bgr.shape[:2], dtype=bool)
+
+    hsv = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2HSV)
+    sat = hsv[:, :, 1].astype(np.float32) / 255.0
+    val = hsv[:, :, 2].astype(np.float32)
+    # Candidate neutral/cloud pixels: bright enough and low-to-moderate saturation
+    # (allows catching warm/cool AWB tints on clouds up to sat < 0.30 while excluding saturated blue sky).
+    b_ch = img_f[:, :, 0]
+    r_ch = img_f[:, :, 2]
+    not_deep_blue = (b_ch - r_ch) < (0.22 * np.maximum(val, 1.0))
+    neutral = mask & (sat < 0.30) & (val > 95.0) & not_deep_blue
+
+    if int(neutral.sum()) >= 50:
+        mb = float(np.mean(img_f[:, :, 0][neutral]))
+        mg = float(np.mean(img_f[:, :, 1][neutral]))
+        mr = float(np.mean(img_f[:, :, 2][neutral]))
+        gray_ref = (mb + mg + mr) / 3.0
+        b_gain = float(np.clip(gray_ref / max(mb, 1.0), 0.75, 1.35))
+        g_gain = float(np.clip(gray_ref / max(mg, 1.0), 0.85, 1.20))
+        r_gain = float(np.clip(gray_ref / max(mr, 1.0), 0.75, 1.35))
+    else:
+        b_gain, g_gain, r_gain = 1.0, 1.0, 1.0
+
+    wb = np.empty_like(img_f)
+    wb[:, :, 0] = img_f[:, :, 0] * b_gain
+    wb[:, :, 1] = img_f[:, :, 1] * g_gain
+    wb[:, :, 2] = img_f[:, :, 2] * r_gain
+
+    luma = 0.114 * wb[:, :, 0] + 0.587 * wb[:, :, 1] + 0.299 * wb[:, :, 2]
+    p85 = float(np.percentile(luma[mask], 85))
+    luma_scale = float(np.clip(target_p85_luma / max(p85, 25.0), 0.70, 1.40)) if p85 > 25.0 else 1.0
+    out = np.clip(wb * luma_scale, 0.0, 255.0).astype(np.uint8)
+
+    nb = out[:, :, 0].astype(np.float32)
+    nr = out[:, :, 2].astype(np.float32)
+    norm_bsi = float(np.mean(((nb - nr) / (nb + nr + 1e-4))[mask]))
+    return out, {
+        "r_gain": round(r_gain, 3),
+        "g_gain": round(g_gain, 3),
+        "b_gain": round(b_gain, 3),
+        "luma_scale": round(luma_scale, 3),
+        "normalized_blue_sky_index": round(norm_bsi, 4),
+    }
+
+
 def analyze_color(
     image_bgr: np.ndarray,
     valid_mask: np.ndarray,
@@ -136,8 +200,11 @@ def analyze_color(
                 "blue_sky_index": round(c_bsi, 3),
             })
 
+    _, ae_awb_meta = normalize_ae_awb_bgr(small, m_small.astype(np.uint8) * 255)
+
     return {
         "rgb_mean": {"r": round(mean_r, 2), "g": round(mean_g, 2), "b": round(mean_b, 2)},
+        "ae_awb_normalization": ae_awb_meta,
         "hsv_mean": {
             "h_deg": round(float(np.mean(hue_vals)), 2),
             "s": round(mean_sat, 3),

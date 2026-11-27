@@ -33,6 +33,92 @@ from app.vision.segmentation import NOT_SKY_IGNORE_INDEX, _radiometric_probabili
 
 AUTO_DATASET_NAME = "location_auto_reinforce"
 FIXED_HOLDOUT_FILENAME = "fixed_holdout.json"
+GOLDEN_DATASET_DIRNAME = "golden_eval"
+
+
+def _load_golden_set_excluded_ids(config: AppConfig) -> tuple[set[int], set[str]]:
+    """Load observation IDs and image names locked inside data/datasets/golden_eval/manifest.json."""
+    obs_ids: set[int] = set()
+    img_names: set[str] = set()
+    manifest_p = config.datasets_dir / GOLDEN_DATASET_DIRNAME / "manifest.json"
+    if not manifest_p.exists():
+        return obs_ids, img_names
+    try:
+        raw = json.loads(manifest_p.read_text(encoding="utf-8"))
+        for it in raw.get("items", []) or []:
+            if it.get("observation_id") is not None:
+                obs_ids.add(int(it["observation_id"]))
+            if it.get("source_raw_path"):
+                img_names.add(Path(str(it["source_raw_path"])).name)
+    except Exception:
+        pass
+    return obs_ids, img_names
+
+
+def enforce_pseudo_label_ratio(
+    items_meta: list[dict[str, Any]],
+    max_pseudo_fraction: float = 0.50,
+) -> list[dict[str, Any]]:
+    """
+    Cap auto/pseudo-labeled training items to at most `max_pseudo_fraction` (<= 50%) of the
+    training split whenever anchor items (human-labeled or baseline replay) exist.
+    Validation/test items are never dropped.
+    """
+    cap = float(np.clip(max_pseudo_fraction, 0.10, 0.50))
+    anchors_train: list[dict[str, Any]] = []
+    pseudo_train: list[dict[str, Any]] = []
+    non_train: list[dict[str, Any]] = []
+
+    for it in items_meta:
+        if it.get("split") != "train":
+            non_train.append(it)
+        elif it.get("user_labeled") or str(it.get("group_key", "")).startswith("replay_"):
+            anchors_train.append(it)
+        else:
+            pseudo_train.append(it)
+
+    if not anchors_train or not pseudo_train:
+        return items_meta
+
+    # Ensure len(pseudo) / (len(anchors) + len(pseudo)) <= cap  =>  len(pseudo) <= len(anchors) * cap / (1 - cap)
+    max_pseudo = max(1, int(len(anchors_train) * (cap / max(1e-6, 1.0 - cap))))
+    if len(pseudo_train) > max_pseudo:
+        idxs = np.linspace(0, len(pseudo_train) - 1, num=max_pseudo, dtype=int)
+        pseudo_train = [pseudo_train[int(i)] for i in sorted(set(idxs.tolist()))]
+    return anchors_train + pseudo_train + non_train
+
+
+def should_promote_checkpoint(
+    candidate_metric: float | None,
+    active_metric: float | None,
+    tolerance: float = 0.01,
+    candidate_by_category: dict[str, float] | None = None,
+    active_by_category: dict[str, float] | None = None,
+    max_category_regression: float = 0.03,
+) -> tuple[bool, str]:
+    """
+    Anti-drift promotion gate:
+      1. If no active model exists, promote initial checkpoint.
+      2. Overall validation metric must be >= active_metric - tolerance.
+      3. No individual sky condition category (clear/partial/overcast/twilight) may regress
+         by more than `max_category_regression`.
+    """
+    if active_metric is None:
+        return True, "promoted_initial"
+    if candidate_metric is None:
+        return False, "rejected_missing_metric"
+    if candidate_metric < (active_metric - tolerance):
+        return False, f"rejected_overall_regression ({candidate_metric:.4f} < {active_metric:.4f} - {tolerance:.3f})"
+    if candidate_by_category and active_by_category:
+        for cat, prev_val in active_by_category.items():
+            if cat in candidate_by_category:
+                cur_val = float(candidate_by_category[cat])
+                if cur_val < float(prev_val) - max_category_regression:
+                    return (
+                        False,
+                        f"rejected_category_regression:{cat} ({cur_val:.4f} < {float(prev_val):.4f} - {max_category_regression:.3f})",
+                    )
+    return True, f"promoted_metric_ok ({candidate_metric:.4f} >= {active_metric:.4f} - {tolerance:.3f})"
 
 
 def _load_or_update_fixed_holdout(
@@ -192,10 +278,15 @@ def auto_label_local_observations(
         "heavy_jpeg_blocking",
         "camera_movement",
     }
+    golden_obs_ids, golden_img_names = _load_golden_set_excluded_ids(config)
     seen_hashes: set[str] = set()
     unique_valid: list[Observation] = []
     for obs in candidates:
+        if obs.id in golden_obs_ids:
+            continue
         if not obs.raw_path or not Path(obs.raw_path).exists():
+            continue
+        if Path(obs.raw_path).name in golden_img_names:
             continue
         q_meta = safe_json_loads(obs.quality_metrics_json, {})
         q_flags = set(q_meta.get("flags") or [])
@@ -429,6 +520,10 @@ def auto_label_local_observations(
         root=root,
         items_meta=items_meta,
         holdout_fraction=float(getattr(at_cfg, "fixed_holdout_fraction", 0.20)),
+    )
+    items_meta = enforce_pseudo_label_ratio(
+        items_meta,
+        max_pseudo_fraction=float(getattr(at_cfg, "max_pseudo_label_fraction", 0.50)),
     )
 
     existing = db.query(DatasetRecord).filter(DatasetRecord.name == AUTO_DATASET_NAME).first()

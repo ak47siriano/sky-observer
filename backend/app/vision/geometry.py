@@ -207,6 +207,110 @@ def project_pixels_to_cloud_plane(
     return east, north, valid
 
 
+def undistort_sky_frame(
+    image_bgr: np.ndarray,
+    geom: CameraGeometry,
+    k1: float = 0.0,
+    k2: float = 0.0,
+    p1: float = 0.0,
+    p2: float = 0.0,
+) -> np.ndarray:
+    """Apply optional pinhole intrinsic lens undistortion (zero-cost no-op when coefficients are 0)."""
+    if abs(k1) < 1e-7 and abs(k2) < 1e-7 and abs(p1) < 1e-7 and abs(p2) < 1e-7:
+        return image_bgr
+    h, w = image_bgr.shape[:2]
+    fx, fy, cx, cy = focal_lengths_px(w, h, geom)
+    cam_mtx = np.array([[fx, 0.0, cx], [0.0, fy, cy], [0.0, 0.0, 1.0]], dtype=np.float64)
+    dist = np.array([float(k1), float(k2), float(p1), float(p2), 0.0], dtype=np.float64)
+    return cv2.undistort(image_bgr, cam_mtx, dist)
+
+
+def triangulate_cloud_base_altitude_m(
+    cam1_lat: float,
+    cam1_lon: float,
+    el1_deg: float,
+    az1_deg: float,
+    cam2_lat: float,
+    cam2_lon: float,
+    el2_deg: float,
+    az2_deg: float,
+    cam1_alt_m: float = 0.0,
+    cam2_alt_m: float = 0.0,
+) -> dict[str, Any]:
+    """
+    Stereo multi-camera cloud-base height triangulation via 3D ENU skew-ray least-squares intersection.
+    Solves for the closest midpoint between the viewing rays of two spatially separated sky cameras.
+    """
+    cos_lat = max(0.15, math.cos(math.radians(0.5 * (cam1_lat + cam2_lat))))
+    p1 = np.array([0.0, 0.0, float(cam1_alt_m)], dtype=np.float64)
+    p2 = np.array(
+        [
+            (float(cam2_lon) - float(cam1_lon)) * 111320.0 * cos_lat,
+            (float(cam2_lat) - float(cam1_lat)) * 111320.0,
+            float(cam2_alt_m),
+        ],
+        dtype=np.float64,
+    )
+    baseline_m = float(np.linalg.norm(p2 - p1))
+    if baseline_m < 10.0:
+        return {"valid": False, "reason": "Stereo baseline < 10 m is too short for cloud-base triangulation."}
+
+    def _unit_ray(el_d: float, az_d: float) -> np.ndarray:
+        el = math.radians(float(el_d))
+        az = math.radians(float(az_d))
+        return np.array([math.cos(el) * math.sin(az), math.cos(el) * math.cos(az), math.sin(el)], dtype=np.float64)
+
+    d1 = _unit_ray(el1_deg, az1_deg)
+    d2 = _unit_ray(el2_deg, az2_deg)
+    w0 = p1 - p2
+    a = float(np.dot(d1, d1))
+    b = float(np.dot(d1, d2))
+    c = float(np.dot(d2, d2))
+    d = float(np.dot(d1, w0))
+    e = float(np.dot(d2, w0))
+    denom = a * c - b * b
+    if abs(denom) < 1e-6:
+        return {"valid": False, "baseline_m": round(baseline_m, 1), "reason": "Viewing rays are nearly parallel."}
+
+    t1 = (b * e - c * d) / denom
+    t2 = (a * e - b * d) / denom
+    if t1 <= 0.0 or t2 <= 0.0:
+        return {
+            "valid": False,
+            "baseline_m": round(baseline_m, 1),
+            "reason": "Rays diverge (intersection behind one or both cameras).",
+        }
+
+    q1 = p1 + t1 * d1
+    q2 = p2 + t2 * d2
+    mid = 0.5 * (q1 + q2)
+    miss_m = float(np.linalg.norm(q1 - q2))
+    alt_m = float(mid[2])
+    if alt_m < 100.0 or alt_m > 18000.0:
+        return {
+            "valid": False,
+            "baseline_m": round(baseline_m, 1),
+            "altitude_m": round(alt_m, 1),
+            "ray_miss_m": round(miss_m, 1),
+            "reason": "Triangulated altitude outside physical troposphere bounds (100-18000 m).",
+        }
+
+    parallax_deg = math.degrees(math.acos(max(-1.0, min(1.0, float(np.dot(d1, d2))))))
+    # Geometric uncertainty scales with ray miss + 1 deg pointing uncertainty over stereo parallax
+    geom_unc_m = max(miss_m * 0.5, (alt_m / max(1.0, parallax_deg)) * 0.5)
+    cloud_lat, cloud_lon = _en_to_latlon(cam1_lat, cam1_lon, float(mid[0]), float(mid[1]))
+    return {
+        "valid": True,
+        "altitude_m": round(alt_m, 1),
+        "uncertainty_m": round(geom_unc_m, 1),
+        "baseline_m": round(baseline_m, 1),
+        "parallax_deg": round(parallax_deg, 2),
+        "ray_miss_m": round(miss_m, 1),
+        "cloud_lat": cloud_lat,
+        "cloud_lon": cloud_lon,
+    }
+
+
 def _en_to_latlon(lat: float, lon: float, east_m: float, north_m: float) -> list[float]:
     cos_lat = max(0.15, math.cos(math.radians(lat)))
     d_lat = north_m / 111320.0

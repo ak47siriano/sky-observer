@@ -376,7 +376,7 @@ export const TRANSLATIONS: Record<Locale, Record<string, string>> = {
     "radar.yourPin": "Your Camera Pin",
     "radar.searchPlaceholder": "Search city or town...",
     "radar.searchBtn": "Search",
-    "radar.offlineNotice": "Offline Only active: rendering local radar canvas with zero external network calls.",
+    "radar.offlineNotice": "Offline Only active: rendering local sky cloud projection canvas with zero external network calls.",
     "radar.layerCameraClouds": "Camera Clouds",
     "radar.layerOpenMeteo": "Open-Meteo Clouds",
     "radar.layerRainViewer": "RainViewer Radar",
@@ -442,7 +442,7 @@ export const TRANSLATIONS: Record<Locale, Record<string, string>> = {
     "dash.nowcast": "Short-Term Nowcast",
     "dash.alerts": "Active Alerts",
     "dash.allClear": "All clear — no active alerts.",
-    "dash.openMap": "Open Radar Map",
+    "dash.openMap": "Open Cloud Map",
     "dash.systemReady": "Local Engine",
     "autotrain.title": "Location Auto-Train",
     "autotrain.subtitle": "Auto-label & reinforce models on your camera's local sky images",
@@ -594,7 +594,7 @@ export const TRANSLATIONS: Record<Locale, Record<string, string>> = {
     "models.guide.seg.what":
       "Analyzes the sky photo pixel-by-pixel (512×512) and classifies every point of the sky into 6 classes: Clear Sky, Thin Cloud, Dense Cloud, Dark Storm Cloud, Haze/Fog, or Uncertain (ignoring trees/buildings/logos masked in your ROI).",
     "models.guide.seg.use":
-      "Computes the exact Cloud Coverage % (Total, Thin, Dense, Dark), generates the colored Segmentation overlay on Dashboard, projects your local clouds onto the 3D Georeferenced Radar Map, and calculates the 3×3 sky regional grid.",
+      "Computes the exact Cloud Coverage % (Total, Thin, Dense, Dark), generates the colored Segmentation overlay on Dashboard, projects your local clouds onto the Georeferenced Sky Cloud Map, and calculates the 3×3 sky regional grid.",
     "models.guide.seg.metrics":
       "val_miou (0→1, higher is better): overlap precision between predicted cloud masks and true masks. val_pixel_acc (0→1): % of sky pixels classified correctly. val_loss (lower is better).",
     "models.guide.cls.title": "2. CloudTypeClassifier-Fusion (11 Sky Classes)",
@@ -602,7 +602,7 @@ export const TRANSLATIONS: Record<Locale, Record<string, string>> = {
     "models.guide.cls.what":
       "Combines a CNN visual backbone (224×224 image) with 12 physical sky features (luminance L*, blue-sky index, texture contrast, cloud fractions) to recognize the meteorological cloud type among 11 classes (Clear, Cirrus, Cirrostratus, Cumulus, Stratocumulus, Stratus, Altocumulus, Altostratus, Cumulonimbus-like, Mixed, Hazy).",
     "models.guide.cls.use":
-      "Populates the 'Dominant Cloud Type' card on the Dashboard & Radar Map, provides the probability breakdown chart in Live Vision, and helps the forecast engine distinguish harmless high cirrus from convective cumulus or storm clouds.",
+      "Populates the 'Dominant Cloud Type' card on the Dashboard & Cloud Map, provides the probability breakdown chart in Live Vision, and helps the forecast engine distinguish harmless high cirrus from convective cumulus or storm clouds.",
     "models.guide.cls.metrics":
       "val_accuracy (0→1, higher is better): % of frames with the exact cloud genus. val_macro_f1 (0→1, higher is better): balanced score across all rare and common cloud types.",
     "models.guide.tmp.title": "3. TemporalSkyConvGRU (Short-Term Nowcasting)",
@@ -668,12 +668,12 @@ export const TRANSLATIONS: Record<Locale, Record<string, string>> = {
     "trends.maeEmpty": "Waiting for verified forecasts to chart AI MAE improvement over time.",
     "multicam.title": "Multi-Camera 360° Sky Fusion (Secondary Cameras)",
     "multicam.subtitle":
-      "Connect additional cameras pointing in complementary directions (e.g., North + South) to fuse their cloud projections onto the same 3D Radar Map.",
+      "Connect additional cameras pointing in complementary directions (e.g., North + South) to fuse their cloud projections onto the same Georeferenced Cloud Map and enable stereo cloud-base triangulation.",
     "multicam.addBtn": "+ Add Camera",
     "multicam.saveBtn": "Save Multi-Camera Setup",
     "multicam.savedMsg": "Multi-camera 360° configuration saved.",
     "multicam.testCapture": "Capture & Fuse",
-    "multicam.empty": "No secondary cameras configured. Click '+ Add Camera' to enable 360° radar fusion.",
+    "multicam.empty": "No secondary cameras configured. Click '+ Add Camera' to enable 360° cloud-map fusion & stereo triangulation.",
     "multicam.name": "Camera Name",
     "multicam.source": "Source",
     "multicam.url": "RTSP / HTTP URL",
@@ -1148,7 +1148,7 @@ export const TRANSLATIONS: Record<Locale, Record<string, string>> = {
     "radar.yourPin": "La tua Camera",
     "radar.searchPlaceholder": "Cerca città o località...",
     "radar.searchBtn": "Cerca",
-    "radar.offlineNotice": "Modalità Solo Offline: mappa radar locale attiva senza chiamate di rete esterne.",
+    "radar.offlineNotice": "Modalità Solo Offline: proiezione nuvolosa locale attiva senza chiamate di rete esterne.",
     "radar.layerCameraClouds": "Nubi Camera",
     "radar.layerOpenMeteo": "Nubi Open-Meteo",
     "radar.layerRainViewer": "Radar RainViewer",
@@ -1214,7 +1214,7 @@ export const TRANSLATIONS: Record<Locale, Record<string, string>> = {
     "dash.nowcast": "Previsione Rapida",
     "dash.alerts": "Avvisi Attivi",
     "dash.allClear": "Tutto regolare — nessun avviso attivo.",
-    "dash.openMap": "Apri Mappa Radar",
+    "dash.openMap": "Apri Mappa Nuvole",
     "dash.systemReady": "Motore Locale",
     "autotrain.title": "Auto-Addestramento Locale",
     "autotrain.subtitle": "Auto-etichetta e rinforza i modelli sulle immagini reali della tua località",
@@ -1320,7 +1320,7 @@ export const TRANSLATIONS: Record<Locale, Record<string, string>> = {
     "data.cat.forecasts": "Previsioni e Verifiche Storiche",
     "data.cat.events": "Eventi, Avvisi e Snapshot",
     "data.cat.timelapse": "Video Timelapse e Archivio Frame",
-    "data.cat.map_tiles": "Tessere Mappa Radar Offline",
+    "data.cat.map_tiles": "Tessere Mappa Nuvole Offline",
     "data.cat.exclusion_masks": "Maschere di Esclusione e ROI",
     "data.cat.datasets": "Dataset di Training AI ed Etichette",
     "data.cat.models": "Modelli PyTorch Addestrati (mantiene i default)",
@@ -1366,7 +1366,7 @@ export const TRANSLATIONS: Record<Locale, Record<string, string>> = {
     "models.guide.seg.what":
       "Analizza ogni singolo pixel della foto del cielo (512×512) e lo classifica in 6 categorie: Cielo Sereno, Nube Sottile, Nube Densa, Nube Scura/Temporalesca, Foschia/Nebbia o Incerto (ignorando alberi, tetti, strade e loghi esclusi nella maschera ROI).",
     "models.guide.seg.use":
-      "Calcola la % esatta di Copertura Nuvolosa (Totale, Sottili, Dense, Scure), disegna la mappa colorata in 'Segmentazione', e soprattutto proietta le nubi reali rilevate dalla tua camera sulla Mappa Radar Georeferenziata (corretta per il Tilt 3D).",
+      "Calcola la % esatta di Copertura Nuvolosa (Totale, Sottili, Dense, Scure), disegna la mappa colorata in 'Segmentazione', e soprattutto proietta le nubi reali rilevate dalla tua camera sulla Mappa Nuvole Georeferenziata (corretta per il Tilt 3D).",
     "models.guide.seg.metrics":
       "val_miou (0→1, più alto è meglio): precisione di sovrapposizione tra i bordi delle nubi previsti e quelli reali. val_pixel_acc (0→1): % di pixel del cielo classificati correttamente. val_loss (più basso è meglio).",
     "models.guide.cls.title": "2. CloudTypeClassifier-Fusion (Classificazione Tipo di Nube)",
@@ -1374,7 +1374,7 @@ export const TRANSLATIONS: Record<Locale, Record<string, string>> = {
     "models.guide.cls.what":
       "Unisce una rete visiva CNN (immagine 224×224) con 12 misure fisiche del cielo (luminanza L*, indice di blu, contrasto texture, frazioni di nubi) per riconoscere il genere meteorologico tra 11 classi (Cielo Sereno, Cirri, Cirrostrati, Cumuli, Stratocumuli, Strati, Altocumuli, Altostrati, Cumulonembo/Temporale, Nubi Miste, Foschia).",
     "models.guide.cls.use":
-      "Alimenta il riquadro 'Tipo di Nube Dominante' nella Dashboard e nella Mappa Radar, mostra il grafico delle probabilità in Visione Live e aiuta il motore previsionale a distinguere innocui cirri alti da cumuli o cumulonembi scuri.",
+      "Alimenta il riquadro 'Tipo di Nube Dominante' nella Dashboard e nella Mappa Nuvole, mostra il grafico delle probabilità in Visione Live e aiuta il motore previsionale a distinguere innocui cirri alti da cumuli o cumulonembi scuri.",
     "models.guide.cls.metrics":
       "val_accuracy (0→1, più alto è meglio): % di foto in cui indovina il tipo di nube. val_macro_f1 (0→1, più alto è meglio): media bilanciata su tutte le classi (anche quelle più rare).",
     "models.guide.tmp.title": "3. TemporalSkyConvGRU (Previsione Temporale / Nowcasting)",
@@ -1438,14 +1438,14 @@ export const TRANSLATIONS: Record<Locale, Record<string, string>> = {
     "trends.series.absErr": "Errore Assoluto (%)",
     "trends.series.rollingMae": "MAE Mobile (10 ver.)",
     "trends.maeEmpty": "In attesa di previsioni verificate per tracciare l'andamento dell'errore MAE nel tempo.",
-    "multicam.title": "Multi-Camera 360° (Camere Secondarie per Fusione Radar)",
+    "multicam.title": "Multi-Camera 360° (Camere Secondarie & Triangolazione Stereo)",
     "multicam.subtitle":
-      "Collega camere aggiuntive puntate in direzioni opposte (es. Nord + Sud) per fondere le loro proiezioni sulla stessa Mappa Radar 3D.",
+      "Collega camere aggiuntive puntate in direzioni complementari (es. Nord + Sud) per fondere le loro proiezioni sulla stessa Mappa Nuvole Georeferenziata e stimare la quota base nubi via triangolazione stereo.",
     "multicam.addBtn": "+ Aggiungi Camera",
     "multicam.saveBtn": "Salva Multi-Camera",
     "multicam.savedMsg": "Configurazione Multi-Camera 360° salvata.",
     "multicam.testCapture": "Cattura e Fondi",
-    "multicam.empty": "Nessuna camera secondaria configurata. Clicca '+ Aggiungi Camera' per attivare la fusione radar 360°.",
+    "multicam.empty": "Nessuna camera secondaria configurata. Clicca '+ Aggiungi Camera' per attivare fusione mappa nuvole 360° e triangolazione stereo.",
     "multicam.name": "Nome Camera",
     "multicam.source": "Sorgente",
     "multicam.url": "URL RTSP / HTTP",

@@ -15,7 +15,7 @@ from app.vision.masking import neutralize_excluded_pixels
 
 NOT_SKY_IGNORE_INDEX = 255
 
-# 5 clean pixel-level classes (Haze/Fog and Uncertain removed to eliminate labeling noise)
+# 5 internal radiometric classes + reduced 3-class taxonomy (clear_sky / cloud / thick_cloud + exclusion mask 255)
 SEG_CLASSES = [
     "clear_sky",    # 0
     "thin_cloud",   # 1
@@ -23,6 +23,43 @@ SEG_CLASSES = [
     "dark_cloud",   # 3
     "sun_glare",    # 4
 ]
+
+SEG_CLASSES_3 = (
+    "clear_sky",    # 0
+    "cloud",        # 1 (thin / scattered cloud)
+    "thick_cloud",  # 2 (dense + dark cloud)
+)
+
+
+def reduce_segmentation_to_3_classes(
+    class_map: np.ndarray,
+    valid_mask: np.ndarray | None = None,
+) -> tuple[np.ndarray, dict[str, float]]:
+    """
+    Collapse 5-class internal segmentation into 3 clean classes + 255 ignore/exclusion mask:
+      0 -> 0 (clear_sky)
+      1 -> 1 (cloud)
+      2, 3 -> 2 (thick_cloud)
+      4 (sun_glare) or excluded pixels -> 255 (NOT_SKY_IGNORE_INDEX)
+    """
+    reduced = np.full(class_map.shape, NOT_SKY_IGNORE_INDEX, dtype=np.uint8)
+    reduced[class_map == 0] = 0
+    reduced[class_map == 1] = 1
+    reduced[(class_map == 2) | (class_map == 3)] = 2
+    if valid_mask is not None:
+        vm = valid_mask
+        if vm.shape[:2] != class_map.shape[:2]:
+            vm = cv2.resize(vm, (class_map.shape[1], class_map.shape[0]), interpolation=cv2.INTER_NEAREST)
+        reduced[vm == 0] = NOT_SKY_IGNORE_INDEX
+
+    valid_px = reduced != NOT_SKY_IGNORE_INDEX
+    denom = max(1, int(valid_px.sum()))
+    pcts = {
+        "clear_sky_pct": round(float((reduced == 0).sum()) / denom * 100.0, 2),
+        "cloud_pct": round(float((reduced == 1).sum()) / denom * 100.0, 2),
+        "thick_cloud_pct": round(float((reduced == 2).sum()) / denom * 100.0, 2),
+    }
+    return reduced, pcts
 
 # High-contrast Windy-style BGR color palette for visual overlays
 SEG_PALETTE_BGR = {

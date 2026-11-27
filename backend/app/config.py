@@ -103,7 +103,11 @@ class CameraConfig(BaseModel):
     orientation_elevation_deg: float = Field(default=65.0, ge=-20.0, le=90.0)
     orientation_roll_deg: float = Field(default=0.0, ge=-45.0, le=45.0)
     tilt_correction_enabled: bool = True
-    max_projection_zenith_deg: float = Field(default=70.0, ge=30.0, le=88.0)
+    max_projection_zenith_deg: float = Field(default=70.0, ge=30.0, le=75.0)
+    lens_k1: float = Field(default=0.0, ge=-1.5, le=1.5)
+    lens_k2: float = Field(default=0.0, ge=-1.5, le=1.5)
+    lens_p1: float = Field(default=0.0, ge=-0.5, le=0.5)
+    lens_p2: float = Field(default=0.0, ge=-0.5, le=0.5)
     night_mode_enabled: bool = True
     night_urban_light_pollution: bool | None = None
     night_clear_baseline_l: float | None = Field(default=None, ge=1.0, le=50.0)
@@ -169,6 +173,8 @@ class AutoTrainConfig(BaseModel):
     warm_start: bool = True
     fixed_holdout_fraction: float = Field(default=0.20, ge=0.05, le=0.50)
     promotion_tolerance: float = Field(default=0.01, ge=0.0, le=0.20)
+    max_pseudo_label_fraction: float = Field(default=0.50, ge=0.10, le=0.50)
+    max_category_regression: float = Field(default=0.03, ge=0.0, le=0.20)
 
 
 class AIConfig(BaseModel):
@@ -197,7 +203,7 @@ class AIConfig(BaseModel):
     dinov3_weights_path: str = ""
     cls_backbone: Literal["efficientnet_b0", "convnext_tiny", "compact"] = "efficientnet_b0"
     pretrained_backbone: bool = True
-    group_ambiguous_wmo: bool = False
+    group_ambiguous_wmo: bool = True
     event_engine_mode: Literal["hybrid", "deterministic", "neural"] = "hybrid"
     training_enabled: bool = True
     default_epochs: int = Field(default=12, ge=1, le=200)
