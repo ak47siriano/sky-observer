@@ -1,28 +1,38 @@
 services:
-  backend:
+  sky-observer:
     build:
       context: .
-      dockerfile: backend/Dockerfile
-    container_name: skyobserver-backend
+      dockerfile: Dockerfile
+      args:
+        PYTORCH_INDEX_URL: ${SKYOBSERVER_PYTORCH_INDEX_URL:-https://download.pytorch.org/whl/cpu}
+    container_name: sky-observer
     restart: unless-stopped
+    # Default binds to loopback only (127.0.0.1:8080).
+    # To access from your LAN, set SKYOBSERVER_HOST=0.0.0.0 in .env (enable API auth first)
+    # or pair with docker-compose.https.yml (Caddy HTTPS reverse proxy for LAN PWA install).
+    ports:
+      - "${SKYOBSERVER_HOST:-127.0.0.1}:${SKYOBSERVER_PORT:-8080}:8080"
     environment:
-      - SKYOBSERVER_ENV=production
-      - SKYOBSERVER_OFFLINE_MODE=true
-      - SKYOBSERVER_DEVICE=auto
-      - SKYOBSERVER_MAX_GPU_MEMORY_FRACTION=0.85
+      - SKYOBSERVER_ENV=${SKYOBSERVER_ENV:-production}
+      - SKYOBSERVER_OFFLINE_MODE=${SKYOBSERVER_OFFLINE_MODE:-true}
+      - SKYOBSERVER_DEVICE=${SKYOBSERVER_DEVICE:-auto}
+      - SKYOBSERVER_MAX_GPU_MEMORY_FRACTION=${SKYOBSERVER_MAX_GPU_MEMORY_FRACTION:-0.85}
       - SKYOBSERVER_DATA_DIR=/data
       - SKYOBSERVER_CONFIG_PATH=/config/config.yaml
+      - TZ=${TZ:-UTC}
     volumes:
       - skyobserver_db:/data/db
       - skyobserver_images:/data/images
       - skyobserver_models:/data/models
       - skyobserver_datasets:/data/datasets
       - skyobserver_timelapse:/data/timelapse
+      - skyobserver_map_tiles:/data/map_tiles
+      - skyobserver_masks:/data/masks
       - ./config:/config
     networks:
       - skyobserver_net
     healthcheck:
-      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8080/api/system/health"]
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8080/api/health"]
       interval: 30s
       timeout: 5s
       retries: 3
@@ -32,31 +42,14 @@ services:
         limits:
           memory: ${SKYOBSERVER_MEM_LIMIT:-8G}
 
-  frontend:
-    build:
-      context: .
-      dockerfile: frontend/Dockerfile
-    container_name: skyobserver-frontend
-    restart: unless-stopped
-    depends_on:
-      backend:
-        condition: service_healthy
-    ports:
-      - "127.0.0.1:8080:8080"
-    networks:
-      - skyobserver_net
-    healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/healthz"]
-      interval: 30s
-      timeout: 5s
-      retries: 3
-
 volumes:
   skyobserver_db:
   skyobserver_images:
   skyobserver_models:
   skyobserver_datasets:
   skyobserver_timelapse:
+  skyobserver_map_tiles:
+  skyobserver_masks:
 
 networks:
   skyobserver_net:

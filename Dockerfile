@@ -30,10 +30,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /app
 
-# Install CPU-only PyTorch wheels first to avoid ~2 GB of unused CUDA libraries in default images
+# Install CPU-only PyTorch wheels by default to avoid ~2 GB of unused CUDA libraries;
+# docker-compose.gpu.yml overrides PYTORCH_INDEX_URL with the CUDA wheel index (e.g. cu124).
+ARG PYTORCH_INDEX_URL=https://download.pytorch.org/whl/cpu
 COPY backend/requirements.txt /app/backend/requirements.txt
 RUN pip install --no-cache-dir --upgrade pip && \
-    pip install --no-cache-dir --index-url https://download.pytorch.org/whl/cpu torch torchvision && \
+    pip install --no-cache-dir --index-url ${PYTORCH_INDEX_URL} torch torchvision && \
     pip install --no-cache-dir -r /app/backend/requirements.txt
 
 COPY backend /app/backend
@@ -41,8 +43,8 @@ COPY --from=frontend-builder /build/frontend/dist /app/frontend/dist
 COPY config /config
 
 RUN groupadd -r skyobserver && useradd -r -g skyobserver -u 1000 skyobserver && \
-    mkdir -p /data/db /data/images/raw /data/images/processed /data/images/masks \
-             /data/models /data/datasets /data/timelapse /data/map_tiles /config && \
+    mkdir -p /data/db /data/images/raw /data/images/processed /data/images/events /data/images/masks \
+             /data/masks /data/models /data/datasets /data/timelapse /data/map_tiles /config && \
     chown -R skyobserver:skyobserver /app /data /config
 
 USER skyobserver
