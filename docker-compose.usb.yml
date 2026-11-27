@@ -1,0 +1,14 @@
+# Optional Linux USB / V4L2 webcam passthrough override (e.g. USB sky camera or Iriun v4l2loopback on Linux).
+# Note: The standard docker-compose.yml supports ONLY network camera sources (IP Webcam, RTSP, HLS,
+# or a mounted AllSky folder). Docker Desktop on Windows/macOS does not support direct /dev/video*
+# USB passthrough — use a network source or run Sky Observer natively on Windows/macOS for USB webcams.
+#
+# Usage (Linux):
+#   docker compose -f docker-compose.yml -f docker-compose.usb.yml up -d
+
+services:
+  sky-observer:
+    devices:
+      - "${SKYOBSERVER_VIDEO_DEVICE:-/dev/video0}:/dev/video0"
+    group_add:
+      - "video"

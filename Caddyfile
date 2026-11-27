@@ -1,0 +1,12 @@
+# Local HTTPS reverse proxy for Sky Observer PWA installation over a private LAN.
+# Set SKYOBSERVER_LAN_HOST in .env to your LAN IP or local hostname (e.g. 192.168.1.50 or skyobserver.local).
+# Usage: docker compose -f docker-compose.yml -f docker-compose.https.yml up -d
+{
+	auto_https disable_redirects
+}
+
+https://{$SKYOBSERVER_LAN_HOST:localhost}:8443 {
+	tls internal
+	encode zstd gzip
+	reverse_proxy sky-observer:8080
+}

@@ -1,0 +1,32 @@
+# Optional HTTPS reverse proxy (Caddy + internal local CA) for installing the Sky Observer PWA over LAN.
+# Service Workers & iOS/Android PWA installation require HTTPS on non-localhost addresses.
+#
+# Usage:
+#   1. In .env, set SKYOBSERVER_HOST=0.0.0.0 and SKYOBSERVER_LAN_HOST=<your-lan-ip-or-hostname>
+#      (enable API token authentication before exposing on a shared LAN).
+#   2. docker compose -f docker-compose.yml -f docker-compose.https.yml up -d
+#   3. Trust Caddy's root certificate (caddy_data/caddy/pki/authorities/local/root.crt) on your phone,
+#      or use Tailscale (`tailscale serve`) / mkcert as documented in docs/INSTALLATION.md.
+
+services:
+  caddy:
+    image: caddy:2-alpine
+    container_name: sky-observer-caddy
+    restart: unless-stopped
+    depends_on:
+      sky-observer:
+        condition: service_healthy
+    environment:
+      - SKYOBSERVER_LAN_HOST=${SKYOBSERVER_LAN_HOST:-localhost}
+    ports:
+      - "${SKYOBSERVER_HOST:-127.0.0.1}:${SKYOBSERVER_HTTPS_PORT:-8443}:8443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    networks:
+      - skyobserver_net
+
+volumes:
+  caddy_data:
+  caddy_config:
