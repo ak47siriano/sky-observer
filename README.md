@@ -14,7 +14,29 @@ Self-hosted application that estimates cloud cover from a sky-facing camera, pro
 ![Sky Observer dashboard showing a compare-swipe split between cloud segmentation overlay and raw sky frame](docs/screenshots/dashboard-live.png)
 *Dashboard in Expert mode: compare-swipe view splitting the sky segmentation mask (left: thin, dense, and dark cloud classes with buildings below the horizon masked out) and the original overcast frame (right), alongside cloud coverage telemetry and short-term cloud cover nowcast horizons.*
 
-<!-- TODO: Replace docs/screenshots/dashboard-live.png (currently captured from a public SkylineWebcams feed) with a screenshot from your own camera so the example image license is unambiguously yours (e.g. CC0 or CC-BY-4.0). -->
+### Interface Walkthrough and Views
+
+![Sky Observer timelapse playback switching from original sky frames to optical-flow cloud motion overlay](docs/assets/sky-observer-demo.gif)
+*Timelapse playback switching between original sky frames and the optical-flow cloud motion overlay (146 captured frames, foreground buildings masked out).*
+
+<details>
+<summary>Additional views (Simple mode, Projected Cloud Map, Segmentation, Motion Vectors, Raw Dashboard)</summary>
+
+| Simple Mode | Projected Cloud Map |
+| :---: | :---: |
+| ![Sky Observer Simple mode view](docs/screenshots/simple-mode-live.png)<br>*Simple mode: high-level sky state, 5/15/30 min summary, and map shortcut.* | ![Sky Observer projected cloud map with camera FOV cone and RainViewer overlay](docs/screenshots/cloud-map-live.png)<br>*Projected cloud map: camera FOV cone, zenith-clipped cloud projection, PiP sky frame, and optional RainViewer radar overlay.* |
+
+| Sky Segmentation | Optical-Flow Motion Vectors |
+| :---: | :---: |
+| ![Sky Observer segmentation mask overlay](docs/screenshots/segmentation-live.png)<br>*Full-frame cloud segmentation overlay with obstacle exclusion mask applied.* | ![Sky Observer optical-flow motion vectors](docs/screenshots/motion-live.png)<br>*Optical-flow velocity field computed on unmasked sky pixels.* |
+
+| Raw Camera View (Expert Dashboard) |
+| :---: |
+| ![Sky Observer Expert dashboard raw sky view](docs/screenshots/dashboard-raw-live.png)<br>*Expert dashboard raw camera frame with cloud cover breakdown, Open-Meteo sync, and short-term cloud cover nowcast.* |
+
+</details>
+
+<!-- TODO: These screenshots and demo recording were captured from a public web stream (SkylineWebcams). Replace them with captures from your own camera if you want all sample media in docs/ to be licensed directly under your chosen license (e.g. CC0 or CC-BY-4.0). -->
 
 ---
 

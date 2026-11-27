@@ -14,7 +14,29 @@ Applicazione self-hosted che stima la copertura nuvolosa da una camera puntata v
 ![Dashboard di Sky Observer con confronto swipe tra maschera di segmentazione e foto del cielo](docs/screenshots/dashboard-live.png)
 *Dashboard in modalità Esperto: vista a confronto tra la maschera di segmentazione del cielo (a sinistra: classi di nubi sottili, dense e scure con edifici sotto l'orizzonte esclusi) e il fotogramma originale coperto (a destra), con telemetria della copertura nuvolosa e nowcast a breve termine.*
 
-<!-- TODO: Sostituire docs/screenshots/dashboard-live.png (attualmente acquisito da uno stream pubblico SkylineWebcams) con uno screenshot ripreso dalla propria camera, così da indicare una licenza chiara per le immagini di esempio (es. CC0 o CC-BY-4.0). -->
+### Demo e Altre Viste dell'Interfaccia
+
+![Riproduzione timelapse di Sky Observer dal cielo originale ai vettori di flusso ottico](docs/assets/sky-observer-demo.gif)
+*Riproduzione timelapse con passaggio dai fotogrammi originali alla sovrapposizione del flusso ottico delle nubi (146 frame acquisiti, edifici esclusi dalla maschera).*
+
+<details>
+<summary>Altre schermate (Modalità Semplice, Mappa Nubi, Segmentazione, Vettori Moto, Dashboard Originale)</summary>
+
+| Modalità Semplice | Mappa Proiezione Nubi |
+| :---: | :---: |
+| ![Vista Modalità Semplice di Sky Observer](docs/screenshots/simple-mode-live.png)<br>*Modalità Semplice: stato del cielo sintetico, riepilogo a 5/15/30 min e accesso rapido alla mappa.* | ![Mappa proiezione nubi di Sky Observer con cono FOV e layer RainViewer](docs/screenshots/cloud-map-live.png)<br>*Mappa proiezione nubi: cono FOV della camera, proiezione con cutoff zenitale, riquadro PiP e layer opzionale RainViewer.* |
+
+| Segmentazione Cielo | Vettori Moto Optical Flow |
+| :---: | :---: |
+| ![Maschera di segmentazione di Sky Observer](docs/screenshots/segmentation-live.png)<br>*Sovrapposizione della segmentazione nuvolosa a schermo intero con maschera di esclusione ostacoli.* | ![Vettori di moto optical flow di Sky Observer](docs/screenshots/motion-live.png)<br>*Campo vettoriale optical flow calcolato esclusivamente sui pixel di cielo non mascherati.* |
+
+| Fotogramma Originale (Dashboard Esperto) |
+| :---: |
+| ![Dashboard Esperto di Sky Observer vista originale](docs/screenshots/dashboard-raw-live.png)<br>*Vista originale nella Dashboard Esperto con dettaglio copertura, sincronizzazione Open-Meteo e nowcast della copertura nuvolosa.* |
+
+</details>
+
+<!-- TODO: Questi screenshot e la registrazione demo provengono da uno stream web pubblico (SkylineWebcams). Sostituiscili con catture dalla tua camera se vuoi rilasciare tutti i media di esempio in docs/ direttamente sotto la tua licenza (es. CC0 o CC-BY-4.0). -->
 
 ---
 
