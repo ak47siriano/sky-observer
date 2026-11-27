@@ -192,3 +192,40 @@ def test_storage_retention_enforces_max_storage_gb_quota_preserving_training_sam
         assert not f_old.exists()
         assert not f_new.exists()
         assert f_train.exists()  # Training sample MUST survive quota enforcement!
+
+
+def test_safe_http_get_handles_gzip_without_double_decompression():
+    import gzip
+    from http.server import BaseHTTPRequestHandler, HTTPServer
+    from threading import Thread
+
+    from app.camera.manager import CameraManager
+
+    payload_text = "<html><meta property='og:image' content='https://example.com/live.jpg' /></html>"
+    gz_body = gzip.compress(payload_text.encode("utf-8"))
+
+    class GzipHandler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Encoding", "gzip")
+            self.send_header("Content-Length", str(len(gz_body)))
+            self.end_headers()
+            self.wfile.write(gz_body)
+
+        def log_message(self, format, *args):
+            return
+
+    server = HTTPServer(("127.0.0.1", 0), GzipHandler)
+    port = server.server_address[1]
+    t = Thread(target=server.serve_forever, daemon=True)
+    t.start()
+    try:
+        cm = CameraManager()
+        resp = cm._safe_http_get(f"http://127.0.0.1:{port}/webcam.html", timeout=5.0, source_type="http_snapshot")
+        assert resp.status_code == 200
+        assert "og:image" in resp.text
+        assert "content-encoding" not in {k.lower() for k in resp.headers.keys()}
+    finally:
+        server.shutdown()
+        server.server_close()

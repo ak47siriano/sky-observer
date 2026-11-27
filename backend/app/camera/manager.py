@@ -265,9 +265,18 @@ class CameraManager:
                         buf.extend(chunk)
                         if len(buf) > max_bytes:
                             raise ValueError(f"Remote response exceeded maximum allowed size ({max_bytes} bytes).")
+                    # resp.iter_bytes() already decompressed Content-Encoding (gzip/br/deflate);
+                    # strip encoding headers so constructing httpx.Response does not double-decompress.
+                    clean_headers = httpx.Headers(
+                        [
+                            (k, v)
+                            for k, v in resp.headers.multi_items()
+                            if k.lower() not in {"content-encoding", "transfer-encoding", "content-length"}
+                        ]
+                    )
                     return httpx.Response(
                         status_code=resp.status_code,
-                        headers=resp.headers,
+                        headers=clean_headers,
                         content=bytes(buf),
                         request=resp.request,
                     )
