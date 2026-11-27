@@ -1,80 +1,79 @@
-<div align="center">
-
-<p>
-  <img src="docs/assets/logo-simple.svg" alt="Sky Observer — Logo Modalità Semplice" width="108" height="108" />
-  &nbsp;&nbsp;&nbsp;&nbsp;
-  <img src="docs/assets/logo-expert.svg" alt="Sky Observer — Logo Modalità Esperto" width="108" height="108" />
-</p>
-
 # Sky Observer
 
-**Osservatorio cielo AI local-first, mappa georeferenziata di proiezione nuvolosa e nowcasting a breve termine con optical flow da smartphone, camera USB/RTSP, ESP32-CAM o AllSky.**
-
-*Funziona al 100% offline su CPU fin dal primo avvio grazie al motore fisico radiometrico calibrato (`radiometric-physics-v1`), con selettore istantaneo **`Semplice` ↔ `Esperto`** (e icona adattiva Doppler Scope), backend neurali PyTorch opzionali (`DeepLabV3`, `DINOv3` linear probe, `CloudSegUNet`), nowcasting confrontato onestamente contro la persistenza, metriche Prometheus e integrazione Home Assistant.*
+Applicazione self-hosted che stima la copertura nuvolosa da una camera puntata verso il cielo, la proietta su una mappa geografica delle nubi e produce nowcast della copertura nuvolosa a breve termine (5–20 min solo camera, fino a 60 min con NWP opzionale).
 
 [![CI](https://github.com/ak47siriano/sky-observer/actions/workflows/ci.yml/badge.svg)](https://github.com/ak47siriano/sky-observer/actions/workflows/ci.yml)
-[![License: MIT](https://img.shields.io/badge/License-MIT-F59E0B.svg)](LICENSE)
-[![Python 3.11+](https://img.shields.io/badge/Python-3.11%2B-3776AB?logo=python&logoColor=white)](pyproject.toml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Latest Release](https://img.shields.io/github/v/release/ak47siriano/sky-observer?include_prereleases)](https://github.com/ak47siriano/sky-observer/releases)
+[![Python 3.11+](https://img.shields.io/badge/Python-3.11%2B-3776AB)](pyproject.toml)
 
-**[English](README.md)** · **[Italiano](README.it.md)**
-
-</div>
-
----
-
-## Anteprima Live
-
-<p align="center">
-  <img src="docs/assets/sky-observer-demo.gif" alt="Sky Observer — Cielo Originale, Segmentazione Nuvolosa, Optical Flow e Mappa Nuvole Proiettata" width="100%" />
-</p>
-
-> *Cattura reale che alterna **Cielo Originale -> Segmentazione Calibrata -> Vettori di Moto Optical Flow -> Confronto Swipe -> Mappa Proiezione Nuvole + Radar Precipitazioni RainViewer opzionale**.*
+[English](README.md) · [Italiano](README.it.md)
 
 ---
 
-## Funzionalità Principali
+![Dashboard di Sky Observer con confronto swipe tra maschera di segmentazione e foto del cielo](docs/screenshots/dashboard-live.png)
+*Dashboard in modalità Esperto: vista a confronto tra la maschera di segmentazione del cielo (a sinistra: classi di nubi sottili, dense e scure con edifici sotto l'orizzonte esclusi) e il fotogramma originale coperto (a destra), con telemetria della copertura nuvolosa e nowcast a breve termine.*
 
-| Area | Implementazione |
-| :--- | :--- |
-| **Doppia Interfaccia (`Semplice` ↔ `Esperto`)** | Switch persistente con 1 clic nell'intestazione e logo **Doppler Scope** adattivo: la **Modalità Semplice** offre verdetto visivo del cielo, mappa nuvole/pioggia e configurazione rapida; la **Modalità Esperto** sblocca telemetria METAR/SYNOP, confronto swipe, vettori di moto, previsioni e AI Lab. |
-| **Segmentazione Zero-GPU Predefinita** | `radiometric-physics-v1` (CIE-Lab + rapporto Rosso/Blu + normalizzazione AE/AWB + guardie anti-abbagliamento solare e base scura) gira su **PC solo CPU da 4 GB RAM** senza scaricare pesi; supporta la proiezione ridotta a **3 classi** (`clear_sky` / `cloud` / `thick_cloud` + `255` esclusione non-cielo). |
-| **Backend Neurali Plug-in** | Supporto opzionale a **`DeepLabV3-MobileNetV3`** (diurno, BSD-3-Clause), **`DINOv3-LinearProbe`** (giorno/notte su 50–100 frame locali via [`scripts/train_dinov3_probe.py`](scripts/train_dinov3_probe.py)) e `CloudSegUNet`. I checkpoint `[baseline-default]` sono protetti da pulizie disco e pruning. |
-| **Classificazione Macro (5 Classi SWIMCAT)** | Accanto alle etichette dettagliate e ai tag di stato cielo (`contrails`, `rain`, `snow`, `fog`), espone 5 macro-classi realistiche da singola camera (`cumuliform_low`, `stratiform_low`, `mid_level`, `high_cirriform`, `convective_storm` + `clear_sky` / `unknown`). |
-| **Nowcasting Onesto & Skill Score** | Advezione semi-Lagrangiana con optical flow + ensemble perturbato (`cover_p10`–`cover_p90`, `fov_exit_fraction`) confrontato esplicitamente contro la **Persistenza** (`skill = 1 - MAE_modello / MAE_persistenza`) con avviso `low_reliability` sugli orizzonti non affidabili. |
-| **Mappa Proiezione Nuvole & Stereo** | Proietta la maschera nuvolosa su Leaflet (con supporto offline a `.pmtiles` locali), cutoff zenitale configurabile (`<= 75°`, mai sotto i `15°` di elevazione), sfumatura di incertezza e endpoint **triangolazione stereo multi-camera** (`POST /api/camera/stereo/triangulate`). Integra opzionalmente **RainViewer** (frame radar passati, `z <= 7`, Universal Blue) o un server self-hosted **LibreWXR**. |
-| **Auto-Train Anti-Drift Rigoroso** | Il Golden Set bloccato non entra mai nel training, al massimo il **50% del batch** può contenere pseudo-label e un nuovo checkpoint viene promosso solo se migliora senza regredire oltre soglia in nessuna categoria di cielo. |
-| **Sicurezza & Smart-Home / Prometheus** | Autenticazione opzionale con token (`SKYOBSERVER_API_TOKEN`) su `/api/*`, `/ws/live` e `/metrics`, conferma server-side sulle azioni distruttive, filtro SSRF, quota disco (`max_storage_gb`), REST `/api/sky-state`, MQTT Auto-Discovery per Home Assistant e scrape **Prometheus `/metrics`**. |
+<!-- TODO: Sostituire docs/screenshots/dashboard-live.png (attualmente acquisito da uno stream pubblico SkylineWebcams) con uno screenshot ripreso dalla propria camera, così da indicare una licenza chiara per le immagini di esempio (es. CC0 o CC-BY-4.0). -->
 
 ---
 
-## Avvio Rapido (Quick Start)
+## Cosa Fa e Cosa Non Fa
 
-Sky Observer utilizza un **unico `Dockerfile` unificato** (FastAPI serve direttamente la PWA React pre-compilata sulla porta **`8080`**), wheel **PyTorch solo CPU** di default e **modalità Offline-First attiva di default (`SKYOBSERVER_OFFLINE_MODE=true`)**: zero richieste verso l'esterno finché non abiliti esplicitamente la modalità Ibrida.
+**Cosa fa:**
+- Acquisisce fotogrammi da camere IP in LAN (`HTTP snapshot`, `MJPEG`, `RTSP`), webcam USB locali, cartelle AllSky, caricamenti manuali o stream web pubblici opzionali.
+- Segmenta i pixel del cielo in classi nuvolose su CPU senza GPU (`radiometric-physics-v1`), con backend PyTorch opzionali (`DeepLabV3-MobileNetV3`, linear probe `DINOv3`, `CloudSegUNet`).
+- Stima il movimento delle nubi tra fotogrammi con optical flow e calcola nowcast della copertura nuvolosa (`+5`, `+15`, `+20` min solo camera), confrontati costantemente con la baseline di persistenza.
+- Proietta la maschera nuvolosa della camera su una mappa geografica delle nubi usando azimut, elevazione, rollio, campo visivo e una quota stimata della base delle nubi.
+- Espone API REST (`/api/sky-state`), WebSocket (`/ws/live`), metriche Prometheus (`/metrics`) e auto-discovery MQTT opzionale per Home Assistant.
 
-### Opzione 1: Docker Compose (Consigliata — Immagine Unificata CPU)
+**Cosa non fa:**
+- **Non** misura l'intensità della precipitazione né rileva la pioggia in autonomia. Il layer di precipitazione richiede di attivare la modalità Ibrida con un provider esterno (RainViewer o LibreWXR self-hosted).
+- **Non** sostituisce un radar meteorologico. La mappa locale è una proiezione ottica della sky camera.
+- **Non** misura la quota della base delle nubi da una singola camera. Le posizioni sulla mappa sono stime geometriche basate su una quota configurata o su un'approssimazione LCL (`125 * (T - Td)`).
+- **Non** misura localmente temperatura, pressione o umidità.
+- **Non** produce previsioni meteo affidabili su più ore da una singola camera con campo visivo stretto.
+
+---
+
+## Stato del Progetto
+
+**Alpha / sperimentale.** La pipeline base di osservazione funziona su CPU ed è coperta da test automatici; l'addestramento neurale e alcune funzioni avanzate sono sperimentali.
+
+- **Funzionante e testato:** Acquisizione camera (`HTTP`, `MJPEG`, `RTSP`, `USB`, `AllSky`, simulazione Demo), maschere di esclusione ostacoli a pennello/poligono, segmentazione `radiometric-physics-v1`, advezione con optical flow e calcolo dello skill score contro la persistenza, archiviazione SQLite con retention e quota disco, modalità Offline predefinita, autenticazione via token API, REST `/api/sky-state` e metriche Prometheus `/metrics`.
+- **Sperimentale o parziale:** Fine-tuning locale PyTorch e Location Auto-Train, addestramento linear probe `DINOv3` giorno/notte, modelli sequenziali `TemporalSkyConvGRU` e `SkyEventClassifier-GRU`, rilevamento notturno delle nubi e triangolazione stereo multi-camera (`POST /api/camera/stereo/triangulate` calcola la geometria 3D da coppie di angoli azimut/elevazione, senza matching automatico tra fotogrammi di due camere).
+
+---
+
+## Requisiti
+
+L'accelerazione GPU (CUDA, ROCm, DirectML o Apple MPS) è opzionale. La segmentazione radiometrica predefinita e il nowcast con optical flow girano su CPU.
+
+| Livello | CPU | RAM | Disco | OS | GPU |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| Minimi | 2 core (x86_64 o ARM64) | 4 GB | 2 GB liberi | Linux, Windows 10/11, macOS | Nessuna (solo CPU) |
+| Consigliati | 4+ core | 8 GB | 10+ GB liberi | Linux, Windows 10/11, macOS | Opzionale (4+ GB VRAM per fine-tuning neurale) |
+
+---
+
+## Avvio Rapido
+
+### Docker (consigliato)
+
 ```bash
 cp .env.example .env
 docker compose up -d --build
 ```
-Apri **`http://localhost:8080`** (esposto solo su `127.0.0.1` di default).
 
-- **Sorgenti camera in Docker standard**: supporta solo **sorgenti di rete** (`http_snapshot` / IP Webcam, `mjpeg_stream`, `rtsp`, `web_stream`, o una cartella `allsky_folder` montata).
-- **Webcam USB / Iriun su Linux**:
-  ```bash
-  docker compose -f docker-compose.yml -f docker-compose.usb.yml up -d
-  ```
-  *(Su Windows/macOS Docker Desktop non passa nativamente `/dev/video*`: usa uno stream di rete oppure l'installazione nativa sotto.)*
-- **GPU NVIDIA (CUDA 12.4)**:
-  ```bash
-  docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d --build
-  ```
-- **LAN & PWA Mobile in HTTPS**: i Service Worker e l'installazione PWA su smartphone richiedono HTTPS sugli IP LAN. Imposta `SKYOBSERVER_API_TOKEN`, `SKYOBSERVER_HOST=0.0.0.0` e `SKYOBSERVER_LAN_HOST=<tuo-ip-lan>` in `.env` e avvia con Caddy HTTPS (oppure usa **mkcert** / **Tailscale**, vedi [`docs/INSTALLATION.md`](docs/INSTALLATION.md)):
-  ```bash
-  docker compose -f docker-compose.yml -f docker-compose.https.yml up -d
-  ```
+Apri `http://localhost:8080`. L'applicazione si avvia in **modalità Offline** in ascolto su `127.0.0.1`, con una sorgente **Demo Sky Simulation** integrata nel caso non sia ancora collegata una camera fisica.
 
-### Opzione 2: Installazione Nativa (Linux / macOS — Bash)
+Note:
+- **Webcam USB / Iriun (solo Linux):** Il `docker-compose.yml` standard supporta solo stream di rete e cartelle montate. Su Linux, per passare `/dev/video0`, avvia `docker compose -f docker-compose.yml -f docker-compose.usb.yml up -d`. Docker Desktop su Windows e macOS non inoltra `/dev/video*` nativamente: usa uno stream di rete oppure l'installazione nativa.
+- **GPU NVIDIA:** Avvia `docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d --build` (usa wheel PyTorch CUDA 12.4).
+- **Accesso da telefono / LAN e installazione PWA:** Prima di impostare `SKYOBSERVER_HOST=0.0.0.0`, imposta un `SKYOBSERVER_API_TOKEN` robusto in `.env` e servi l'app in HTTPS tramite `docker compose -f docker-compose.yml -f docker-compose.https.yml up -d` (Caddy) oppure Tailscale/mkcert. Vedi [docs/INSTALLATION.md](docs/INSTALLATION.md).
+
+### Installazione nativa (Linux / macOS — Bash)
+
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
@@ -86,7 +85,8 @@ cd frontend && npm ci && npm run build && cd ..
 PYTHONPATH=backend uvicorn app.main:app --host 127.0.0.1 --port 8080
 ```
 
-### Opzione 3: Installazione Nativa (Windows — PowerShell)
+### Installazione nativa (Windows — PowerShell)
+
 ```powershell
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
@@ -99,51 +99,129 @@ $env:PYTHONPATH = "backend"
 .\.venv\Scripts\python.exe -m uvicorn app.main:app --host 127.0.0.1 --port 8080
 ```
 
----
-
-## Benchmark Riproducibili (vs Baseline Naive)
-
-Tutti i numeri seguenti sono misurati direttamente da `PYTHONPATH=backend python scripts/evaluate.py` con **split cronologici a giornate intere** e baseline esplicite (zero metriche inventate; golden set locali e dataset pubblici `SWIMSEG`/`SWINySEG`/`WSISEG` in `data/datasets/` vengono valutati automaticamente):
-
-| Task | Dataset | Modello vs Baseline | Risultato Misurato |
-| :--- | :--- | :--- | :--- |
-| **Segmentazione** | `bundled_synthetic_sky_18f` (`n=18`) | `radiometric-physics-v1` vs R/B Fisso vs Otsu | Physics mIoU **`0.8725`** (Cover MAE **`5.02%`**) · R/B Fisso `0.8628` (`7.09%`) · Otsu `0.8375` (`7.78%`) |
-| **Classificazione** | `bundled_synthetic_sky_18f` (giorno held-out `n=6`) | `physical-heuristic-v1` vs kNN 12-feat vs Maggioranza | Euristica Acc **`0.6667`** (F1 `0.5714`) · kNN **`0.8333`** (F1 `0.7778`) · Maggioranza `0.1667` |
-| **Nowcast (+5 min)** | `bundled_panoramic_cloud_front_14f` (`n=11`) | Pers vs Lineare vs OF vs Ibrido | Pers `12.59%` · Lin `5.92%` (`+0.53`) · OF `9.47%` (`+0.25`) · Ibrido `6.49%` (`+0.48`) |
-| **Nowcast (+15 min)** | `bundled_panoramic_cloud_front_14f` (`n=7`) | Pers vs Lineare vs OF vs Ibrido | Pers `41.27%` · Lin `16.77%` (`+0.59`) · OF `33.83%` (`+0.18`) · Ibrido `26.37%` (`+0.36`) |
-| **Nowcast (+20 min)** | `bundled_panoramic_cloud_front_14f` (`n=5`) | Pers vs Lineare vs OF vs Ibrido | Pers `54.58%` · Lin `23.69%` (`+0.57`) · OF `43.98%` (`+0.19`) · Ibrido `37.66%` (`+0.31`) |
-
-Dettagli completi (metriche stratificate per condizione e verifica eventi su finestra futura oggettiva) in [`docs/MODEL_CARD.md`](docs/MODEL_CARD.md).
+Sia Docker sia l'installazione nativa ascoltano sulla porta `8080` di default.
 
 ---
 
-## Integrazioni: Home Assistant & Prometheus
+## Configurazione
 
-- **Home Assistant REST**: interroga `GET http://<ip-lan>:8080/api/sky-state` (o attiva `mqtt:` in `config/config.yaml` con `pip install -e ".[mqtt]"` per l'Auto-Discovery automatica).
-- **Prometheus (`/metrics`)**: endpoint nativo in formato testuale Prometheus (`sky_observer_up`, `sky_observer_camera_connected`, `sky_observer_observations_total`, `sky_observer_cloud_coverage_pct`, `sky_observer_quality_score`, `sky_observer_inference_ms`, `sky_observer_storage_used_mb`, `sky_observer_active_models_count`). Se `SKYOBSERVER_API_TOKEN` è impostato, passa `Authorization: Bearer <token>`.
-- **Verifica METAR**: `GET /api/verification/metar` confronta l'osservazione locale con i bollettini METAR più vicini (disabilitato automaticamente in modalità Offline).
+Copia `.env.example` in `.env` per modificare i valori predefiniti. Le impostazioni dettagliate di camera, geometria, storage e MQTT si trovano in `config/config.yaml`.
+
+| Variabile | Default | Descrizione |
+| :--- | :--- | :--- |
+| `SKYOBSERVER_OFFLINE_MODE` | `true` | Modalità Offline predefinita. Blocca tutte le chiamate esterne verso meteo, geocoding, METAR, radar e stream web pubblici. |
+| `SKYOBSERVER_HOST` | `127.0.0.1` | Interfaccia host esposta da Docker (o da `uvicorn`). Mantieni `127.0.0.1` finché non metti in sicurezza l'accesso LAN. |
+| `SKYOBSERVER_PORT` | `8080` | Porta HTTP per API e interfaccia web. |
+| `SKYOBSERVER_API_TOKEN` | *(vuoto)* | Token condiviso che protegge `/api/*`, `/ws/live` e `/metrics` e richiede conferma esplicita sulle azioni distruttive. |
+| `SKYOBSERVER_SOURCE_ALLOWLIST` | *(vuoto)* | Lista opzionale (separata da virgole) di host, domini o CIDR consentiti per gli URL camera (protezione SSRF). |
+| `SKYOBSERVER_DEVICE` | `auto` | Dispositivo di calcolo (`auto`, `cpu`, `cuda`, `rocm`, `directml`, `mps`). |
+| `SKYOBSERVER_DATA_DIR` | `/data` (Docker) / `./data` (nativo) | Cartella per DB SQLite, immagini, maschere, timelapse, dataset e file `.pmtiles` locali. |
+| `SKYOBSERVER_VIDEO_DEVICE` | `/dev/video0` | Dispositivo V4L2 Linux usato da `docker-compose.usb.yml`. |
+| `SKYOBSERVER_LAN_HOST` | `localhost` | IP o hostname LAN per il certificato TLS Caddy in `docker-compose.https.yml`. |
+
+**Modalità Offline vs. Modalità Ibrida:**
+- **Modalità Offline (`SKYOBSERVER_OFFLINE_MODE=true`, default):** Nessun traffico di rete verso l'esterno. La mappa delle nubi mostra una griglia geografica locale o eventuali archivi Protomaps `.pmtiles` copiati in `data/map_tiles/`. Il nowcast è limitato agli orizzonti solo-camera (`+5`, `+15`, `+20` min).
+- **Modalità Ibrida (`SKYOBSERVER_OFFLINE_MODE=false`):** Abilita i dati opzionali Open-Meteo (estendendo gli orizzonti a `+30`/`+60` min e stimando l'LCL), i tile radar passati di RainViewer (o LibreWXR self-hosted), i tile cartografici online, il confronto METAR e gli stream `web_stream` pubblici.
+
+---
+
+## Come Funziona
+
+```mermaid
+flowchart LR
+    CAM["Camera / Stream"] --> QC["Controllo Qualita e Maschera Cielo"]
+    QC --> SEG["1. Segmentazione Nubi"]
+    QC --> CLS["2. Classificazione Nubi"]
+    SEG --> FLOW["Optical Flow"]
+    SEG --> MAP["Mappa Proiezione Nubi"]
+    SEG --> NOW["3. Nowcast Copertura"]
+    FLOW --> NOW
+    CLS --> NOW
+    SEG --> EVT["4. Rilevamento Eventi"]
+    NOW --> EVT
+```
+
+1. **Segmentazione delle nubi:** Riceve un fotogramma del cielo e la maschera di esclusione degli ostacoli, e produce una mappa pixel-per-pixel delle classi nuvolose (5 classi interne o proiezione ridotta a 3 classi: `clear_sky`, `cloud`, `thick_cloud`, più `255` per i pixel non-cielo). Funziona subito su CPU con `radiometric-physics-v1`, con supporto opzionale a checkpoint neurali `DeepLabV3-MobileNetV3`, linear probe `DINOv3` o `CloudSegUNet`. Serve per calcolare la percentuale di copertura e costruire la proiezione della sky camera sulla mappa.
+2. **Classificazione delle nubi:** Riceve il fotogramma insieme alle feature radiometriche, di copertura e di tessitura, e restituisce una distribuzione di probabilità sul tipo di nube (tassonomia ridotta a 5 macro-classi allineata a SWIMCAT più etichette euristiche dettagliate e tag di stato cielo opzionali come `fog`, `rain`, `contrails`, restituendo `unknown` sotto la soglia di confidenza). Serve per descrivere la struttura nuvolosa e guidare la stima predefinita della quota nuvolosa in assenza di dati NWP.
+3. **Nowcast della copertura nuvolosa:** Riceve le maschere di segmentazione recenti, i campi di moto optical flow e la sequenza storica delle osservazioni, e produce la copertura nuvolosa prevista a `+5`, `+15` e `+20` min (`+30`/`+60` min solo con Open-Meteo NWP). Combina l'advezione semi-Lagrangiana con optical flow (con percentili di incertezza `p10`–`p90`) e un modello sperimentale `TemporalSkyConvGRU`, sempre confrontati contro la persistenza.
+4. **Rilevamento eventi:** Riceve le variazioni tra fotogrammi di copertura, luminanza e movimento, e genera avvisi operativi e del cielo (rapido aumento nuvoloso, schiarita, oscuramento, ostruzione camera). Combina regole deterministiche, feedback utente (conferma, falso allarme o segnalazione evento mancato) e un classificatore sequenziale sperimentale `SkyEventClassifier-GRU`.
+
+Dettagli implementativi, dimensioni dei tensori e schema di archiviazione sono descritti in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+
+---
+
+## Accuratezza e Valutazione
+
+La valutazione si esegue con `PYTHONPATH=backend python scripts/evaluate.py` (split cronologici a giornate intere e baseline esplicite) e `PYTHONPATH=backend python scripts/evaluate_nowcast.py --from-db`.
+
+**Stato attuale:** La valutazione su un Golden Set etichettato manualmente dalla propria camera reale **non è ancora completata**. I numeri nella tabella seguente derivano solo dalle sequenze sintetiche incluse nella repository; servono come controllo anti-regressione in CI e non vanno interpretati come accuratezza sul campo.
+
+| Task | Set di valutazione (attuale) | Modello | Risultato misurato | Baseline naive |
+| :--- | :--- | :--- | :--- | :--- |
+| Segmentazione | `bundled_synthetic_sky_18f` (`n=18`) | `radiometric-physics-v1` | mIoU binario `0.8725`, MAE copertura `5.02%` | Soglia R/B fissa: mIoU `0.8628`, MAE `7.09%`; Otsu: mIoU `0.8375`, MAE `7.78%` |
+| Classificazione | `bundled_synthetic_sky_18f` (giorno held-out, `n=6`) | `physical-heuristic-v1` | Accuratezza `0.6667`, Macro F1 `0.5714` | kNN 12 feature: Acc `0.8333`, F1 `0.7778`; Maggioranza: Acc `0.1667` |
+| Nowcast copertura (+5 min) | `bundled_panoramic_cloud_front_14f` (`n=11`) | Advezione ibrida | MAE `6.49%`, Skill `+0.48` | Persistenza: MAE `12.59%`; Trend lineare: MAE `5.92%` (`+0.53`) |
+| Nowcast copertura (+15 min) | `bundled_panoramic_cloud_front_14f` (`n=7`) | Advezione ibrida | MAE `26.37%`, Skill `+0.36` | Persistenza: MAE `41.27%`; Trend lineare: MAE `16.77%` (`+0.59`) |
+| Nowcast copertura (+20 min) | `bundled_panoramic_cloud_front_14f` (`n=5`) | Advezione ibrida | MAE `37.66%`, Skill `+0.31` | Persistenza: MAE `54.58%`; Trend lineare: MAE `23.69%` (`+0.57`) |
+
+<!-- TODO: Creare un Golden Set di 150–300 fotogrammi etichettati dalla propria camera con scripts/build_golden_set.py, eseguire scripts/evaluate.py --datasets-dir data/datasets e sostituire/affiancare le righe sintetiche sopra con i risultati su camera reale e su dataset pubblici (SWIMSEG/SWINySEG). -->
+
+Lo skill score è definito come `1 - MAE_modello / MAE_persistenza` (valori `<= 0` indicano nessun miglioramento rispetto alla persistenza). Metriche stratificate per condizione e valutazione eventi sono riportate in [docs/MODEL_CARD.md](docs/MODEL_CARD.md).
 
 ---
 
 ## Limitazioni Note
 
-Sky Observer documenta in modo trasparente i limiti fisici di una stazione basata su camera consumer:
-
-1. **Incertezza della Quota Base Nubi (Monoculare)**: una singola camera non può misurare direttamente l'altitudine delle nubi. L'errore sulla quota stimata (`LCL = 125 * (T - Td)` o valore manuale) si trasferisce linearmente sulla distanza proiettata in mappa. Per ottenere quote reali servono almeno due camere distanziate con l'endpoint di triangolazione stereo `POST /api/camera/stereo/triangulate`.
-2. **Distorsione all'Orizzonte (`tan(zenith)`)**: la proiezione diverge avvicinandosi all'orizzonte; il sistema esclude sempre i pixel oltre `75°` di zenit (`< 15°` di elevazione) e sfuma progressivamente l'opacità con l'incertezza.
-3. **Il Sistema NON È un Radar Meteorologico**: la mappa mostra la **proiezione della copertura nuvolosa ottica** osservata dalla camera, non l'intensità della precipitazione. Le precipitazioni sono visualizzate solo attivando il layer esterno opzionale **RainViewer** (o un proprio server **LibreWXR**).
-4. **Orizzonte di Nowcasting Limitato dal FOV**: con un obiettivo smartphone standard (~70°), le nubi attraversano l'intera inquadratura in 5–15 minuti. Il nowcasting solo-camera è quindi limitato a `+5/+15/+20 min` (con bandiera `low_reliability` se lo skill score non batte la persistenza); orizzonti `+30/+60 min` richiedono i dati NWP di Open-Meteo in modalità Ibrida.
-5. **Notte, Vetri Interni e Smartphone AE/AWB**: di notte il rilevamento dipende da bagliore urbano o visibilità stellare; attraverso vetri interni i riflessi possono introdurre artefatti (segnalati dal QC `window_reflection`). La normalizzazione AE/AWB e la correzione distorsione lente (`lens_k1/k2/p1/p2`) riducono ma non eliminano gli artefatti dei sensori consumer.
-6. **Rischio Drift nell'Auto-Train**: il self-training non supervisionato può degradare nel tempo; per mitigarlo il Golden Set è escluso dal training, le pseudo-label non superano mai il 50% del batch e il gate di promozione scarta qualsiasi checkpoint che peggiori oltre soglia anche su una sola categoria di cielo.
+- **Incertezza della quota delle nubi con una sola camera:** Una camera monoculare non misura l'altitudine delle nubi. Qualsiasi errore sulla quota stimata o calcolata via LCL si propaga linearmente sulla distanza proiettata (`d = H * tan(zenith)`). L'errore cresce rapidamente verso l'orizzonte: la proiezione è tagliata a `<= 75°` di zenit (`>= 15°` di elevazione) e sfuma l'opacità con l'incertezza. Per misurare la quota reale servono due camere distanziate (`POST /api/camera/stereo/triangulate`).
+- **Orizzonte limitato su ottiche strette:** Con un obiettivo smartphone da ~70°, le nubi attraversano l'inquadratura in 5–15 minuti. Gli orizzonti in cui `>= 70%` delle nubi esce dal campo visivo o lo skill storico non batte la persistenza vengono marcati `low_reliability`.
+- **Notte, crepuscolo, abbagliamento e gocce sull'obiettivo:** Il rilevamento notturno dipende dal bagliore del cielo o dalle stelle visibili ed è meno affidabile. Sole diretto, viraggi cromatici al crepuscolo, riflessi su vetri interni e gocce sulla lente degradano segmentazione e classificazione (segnalati dal controllo qualità quando rilevati, ma non eliminati).
+- **Esposizione e bilanciamento del bianco automatici:** Gli smartphone regolano continuamente esposizione e bilanciamento del bianco, alterando il rapporto R/B e la luminanza. La normalizzazione AE/AWB riduce le oscillazioni ma non equivale a un'esposizione manuale bloccata.
+- **Auto-train sperimentale:** L'auto-addestramento non supervisionato può introdurre drift nel tempo. Location Auto-Train esclude il Golden Set bloccato, limita le pseudo-label al 50% del batch e scarta i checkpoint che peggiorano in qualsiasi categoria di cielo, ma richiede comunque revisione umana.
 
 ---
 
-## Documentazione Completa
+## Sicurezza
 
-- [`docs/INSTALLATION.md`](docs/INSTALLATION.md) — Profili hardware, Docker/nativo, HTTPS LAN e protezione smartphone
-- [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — Architettura di sistema e pipeline visiva
-- [`docs/MODEL_CARD.md`](docs/MODEL_CARD.md) — Metriche riproducibili, baseline e riferimenti scientifici
-- [`docs/API.md`](docs/API.md) — Riferimento completo API REST e WebSocket
-- [`docs/DATASETS.md`](docs/DATASETS.md) — Dataset pubblici, licenze e tabelle di conversione classi
-- [`SECURITY.md`](SECURITY.md) — Modello di minaccia, token API, guardie SSRF e gestione credenziali
-- [`CONTRIBUTING.md`](CONTRIBUTING.md) & [`CHANGELOG.md`](CHANGELOG.md) — Linee guida contributi e storico versioni
+- **Non esporre Sky Observer direttamente su Internet.** Il servizio è pensato per uso locale (`localhost`) o in LAN privata / VPN (es. Tailscale o WireGuard).
+- Di default Docker espone il servizio solo su `127.0.0.1:8080`.
+- Prima di esporlo in LAN, imposta `SKYOBSERVER_API_TOKEN`, configura `SKYOBSERVER_SOURCE_ALLOWLIST` se vuoi limitare gli host consentiti per le camere e abilita HTTPS (`docker-compose.https.yml` o reverse proxy).
+- Vedi [SECURITY.md](SECURITY.md) per modello di minaccia, header di autenticazione, protezioni SSRF e segnalazione vulnerabilità.
+
+---
+
+## Documentazione
+
+- [docs/INSTALLATION.md](docs/INSTALLATION.md) — Requisiti hardware, override Docker (GPU, USB, Caddy HTTPS), setup nativo e installazione all'aperto
+- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — Strati della pipeline, backend di segmentazione plug-in e archiviazione SQLite/disco
+- [docs/MODEL_CARD.md](docs/MODEL_CARD.md) — Dettagli dei modelli, gate anti-drift, tabelle di valutazione riproducibili e riferimenti bibliografici
+- [docs/API.md](docs/API.md) — Endpoint REST, WebSocket (`/ws/live`), Home Assistant e Prometheus `/metrics`
+- [docs/DATASETS.md](docs/DATASETS.md) — Dataset pubblici, tabelle di conversione delle classi e formati di importazione
+- [docs/TRAINING.md](docs/TRAINING.md) — Fine-tuning locale, creazione del Golden Set e flusso Auto-Train
+- [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) — Diagnostica camera, fallback GPU e problemi comuni
+- [SECURITY.md](SECURITY.md) — Modello di minaccia, autenticazione via token e gestione credenziali
+- [CHANGELOG.md](CHANGELOG.md) — Cronologia delle versioni
+
+---
+
+## Contribuire
+
+Contributi, segnalazioni di bug e dataset di valutazione sono benvenuti. Consulta [CONTRIBUTING.md](CONTRIBUTING.md) per configurazione dell'ambiente di sviluppo e convenzioni.
+
+Per segnalare un bug includi:
+- Versione di Sky Observer o hash del commit (`git rev-parse --short HEAD`)
+- Sistema operativo e metodo di installazione (Docker Compose o Python nativo)
+- Tipo di sorgente camera (`http_snapshot`, `mjpeg_stream`, `rtsp`, `webcam_device`, `allsky_folder` o `web_stream`)
+- Log del backend pertinenti e passi per riprodurre il problema
+
+---
+
+## Licenza e Crediti
+
+- **Codice sorgente:** Rilasciato sotto [Licenza MIT](LICENSE).
+- **Dataset e pesi addestrati:** Sky Observer include documentazione e adattatori per dataset pubblici di immagini del cielo (tra cui **SWIMSEG**, **SWINSEG**, **SWINySEG**, **WSISEG**, **SWIMCAT**, **CCSN**, **MGCD/GCD** e **LenghuSky-8**). Questi dataset **non** sono inclusi nella repository e sono soggetti alle rispettive licenze (spesso solo uso accademico o non commerciale). I pesi addestrati su dataset di terze parti o basati su backbone esterni (come **DINOv3**) ereditano i vincoli di licenza originali: verifica sempre le condizioni alla fonte prima di ridistribuire i pesi. Vedi [docs/DATASETS.md](docs/DATASETS.md).
+- **Attribuzioni dei servizi esterni (usati solo in modalità Ibrida):**
+  - Dati meteo e geocoding: [Open-Meteo](https://open-meteo.com/) (CC BY 4.0)
+  - Tile cartografici: contributori [OpenStreetMap](https://www.openstreetmap.org/copyright) (ODbL), Esri World Imagery / Dark Gray Canvas, oppure archivi [Protomaps](https://protomaps.com/) `.pmtiles` installati localmente
+  - Layer opzionale radar precipitazioni: [RainViewer](https://www.rainviewer.com/api.html) (solo frame radar passati, soggetti ai limiti del piano gratuito) oppure LibreWXR self-hosted configurato dall'utente
+  - Confronto METAR opzionale: NOAA Aviation Weather Center
+- **Immagini di esempio:** <!-- TODO: Indicare la licenza di docs/screenshots/*.png una volta sostituiti con scatti originali della propria camera. -->
