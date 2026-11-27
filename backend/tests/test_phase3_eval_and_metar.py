@@ -138,3 +138,31 @@ def test_build_golden_set_script_creates_locked_stratified_manifest(isolated_env
     assert manifest["selected_count"] == 6
     assert (out_dir / GOLDEN_LOCK_FILENAME).exists()
     assert (out_dir / "label_studio_tasks.json").exists()
+
+
+def test_evaluate_script_whole_day_split_baselines_and_skill_score():
+    import sys
+
+    scripts_dir = str(Path(__file__).resolve().parents[2] / "scripts")
+    if scripts_dir not in sys.path:
+        sys.path.insert(0, scripts_dir)
+    from evaluate import run_all_benchmarks, skill_score, split_items_by_day
+
+    # Whole-day split must NEVER put the same day in both train and test
+    items = [{"day": f"2026-06-0{d}", "id": i} for d in (1, 2, 3, 4) for i in range(3)]
+    tr, te = split_items_by_day(items, day_key="day", test_fraction=0.25)
+    assert {x["day"] for x in tr}.isdisjoint({x["day"] for x in te})
+    assert len(tr) == 9 and len(te) == 3
+
+    # Exact skill_score check
+    assert skill_score(np.array([50.0, 60.0]), np.array([52.0, 58.0]), np.array([40.0, 50.0])) == 0.8
+
+    # End-to-end benchmark produces all required baselines & stratified metrics
+    rep = run_all_benchmarks(Path("data/datasets_nonexistent"))
+    assert "rb_fixed" in rep["segmentation"]["bundled"]["baselines"]
+    assert "rb_otsu" in rep["segmentation"]["bundled"]["baselines"]
+    assert "by_condition" in rep["segmentation"]["bundled"]
+    assert rep["classification"]["bundled"]["split_strategy"] == "whole_day_chronological"
+    assert "baseline_knn_12f" in rep["classification"]["bundled"]["heldout_day_metrics"]
+    assert "linear_trend_mae_pct" in rep["nowcast"]["horizons"]["5"]
+    assert "rapid_increase" in rep["events"]["events"]

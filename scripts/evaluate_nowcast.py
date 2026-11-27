@@ -125,6 +125,7 @@ def evaluate_bundled_sequence(horizons_steps: list[int] | None = None) -> dict[s
     for k in horizons_steps:
         h_min = int(round(k * step_minutes))
         pers_errs: list[float] = []
+        lin_errs: list[float] = []
         of_errs: list[float] = []
         hybrid_errs: list[float] = []
         pers_ious: list[float] = []
@@ -138,6 +139,7 @@ def evaluate_bundled_sequence(horizons_steps: list[int] | None = None) -> dict[s
             dx, dy, cons = motions[t]
 
             pred_pers = persistence_baseline_cover(curr)
+            pred_lin = float(np.clip(curr + rate_per_min * h_min, 0.0, 100.0))
             adv = advect_cloud_mask_optical_flow(
                 seg_mask=masks[t],
                 dx_px_s=dx,
@@ -156,6 +158,7 @@ def evaluate_bundled_sequence(horizons_steps: list[int] | None = None) -> dict[s
             pred_hybrid = float(np.clip(0.55 * pred_rule + 0.45 * pred_of, 0.0, 100.0))
 
             pers_errs.append(abs(pred_pers - actual))
+            lin_errs.append(abs(pred_lin - actual))
             of_errs.append(abs(pred_of - actual))
             hybrid_errs.append(abs(pred_hybrid - actual))
             fov_exits.append(float(adv["fov_exit_fraction"]))
@@ -170,11 +173,14 @@ def evaluate_bundled_sequence(horizons_steps: list[int] | None = None) -> dict[s
             of_ious.append(_binary_iou(prob_map, masks[t + k]))
 
         p_mae = round(float(np.mean(pers_errs)), 2)
+        l_mae = round(float(np.mean(lin_errs)), 2)
         o_mae = round(float(np.mean(of_errs)), 2)
         h_mae = round(float(np.mean(hybrid_errs)), 2)
         results["horizons"][str(h_min)] = {
             "samples": len(pers_errs),
             "persistence_mae_pct": p_mae,
+            "linear_trend_mae_pct": l_mae,
+            "linear_trend_skill": compute_forecast_skill(l_mae, p_mae),
             "optical_flow_mae_pct": o_mae,
             "optical_flow_skill": compute_forecast_skill(o_mae, p_mae),
             "hybrid_mae_pct": h_mae,

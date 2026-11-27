@@ -135,19 +135,19 @@ $env:PYTHONPATH = "backend"
 
 ## Reproducible Benchmarks
 
-All numbers below are produced directly by `PYTHONPATH=backend python scripts/evaluate.py` on the bundled deterministic sky test sequences (zero invented metrics; public datasets `SWIMSEG` / `SWINySEG` / `WSISEG` / `CCSN` are evaluated automatically when downloaded locally under `data/datasets/`):
+All numbers below are produced directly by `PYTHONPATH=backend python scripts/evaluate.py` using **whole-day chronological splits** and explicit naive baselines (zero invented metrics; local golden sets & public datasets `SWIMSEG` / `SWINySEG` / `WSISEG` are evaluated automatically when placed under `data/datasets/`):
 
-| Task | Dataset | Backend | Measured Result |
+| Task | Dataset | Model vs Baselines | Measured Result |
 | :--- | :--- | :--- | :--- |
-| **Segmentation** | `bundled_synthetic_sky_18f` (`n=18`) | `radiometric-physics-v1` | Binary mIoU **`0.8725`** · Pixel Acc **`0.9354`** |
-| **Classification** | `bundled_synthetic_sky_18f` (`n=18`) | `physical-heuristic-v1` | Accuracy **`0.6667`** · Macro F1 **`0.5939`** |
-| **Nowcast (+5 min)** | `bundled_panoramic_cloud_front_14f` (`n=11`) | Persistence vs OF Advection vs Hybrid | Pers MAE `12.59%` · OF MAE `9.47%` (Skill **`+0.2478`**) · Hybrid MAE `6.49%` (Skill **`+0.4845`**) |
-| **Nowcast (+15 min)** | `bundled_panoramic_cloud_front_14f` (`n=7`) | Persistence vs OF Advection vs Hybrid | Pers MAE `41.27%` · OF MAE `33.83%` (Skill **`+0.1803`**) · Hybrid MAE `26.37%` (Skill **`+0.3610`**) |
-| **Nowcast (+20 min)** | `bundled_panoramic_cloud_front_14f` (`n=5`) | Persistence vs OF Advection vs Hybrid | Pers MAE `54.58%` · OF MAE `43.98%` (Skill **`+0.1942`**) · Hybrid MAE `37.66%` (Skill **`+0.3100`**) |
+| **Segmentation** | `bundled_synthetic_sky_18f` (`n=18`) | `radiometric-physics-v1` vs Fixed R/B vs Otsu | Physics mIoU **`0.8725`** (Cover MAE **`5.02%`**) · R/B Fixed `0.8628` (`7.09%`) · Otsu `0.8375` (`7.78%`) |
+| **Classification** | `bundled_synthetic_sky_18f` (whole-day held-out `n=6`) | `physical-heuristic-v1` vs 12-feat kNN vs Majority | Heuristic Acc **`0.6667`** (F1 `0.5714`) · kNN **`0.8333`** (F1 `0.7778`) · Majority `0.1667` |
+| **Nowcast (+5 min)** | `bundled_panoramic_cloud_front_14f` (`n=11`) | Pers vs Linear vs OF vs Hybrid | Pers `12.59%` · Lin `5.92%` (`+0.53`) · OF `9.47%` (`+0.25`) · Hybrid `6.49%` (`+0.48`) |
+| **Nowcast (+15 min)** | `bundled_panoramic_cloud_front_14f` (`n=7`) | Pers vs Linear vs OF vs Hybrid | Pers `41.27%` · Lin `16.77%` (`+0.59`) · OF `33.83%` (`+0.18`) · Hybrid `26.37%` (`+0.36`) |
+| **Nowcast (+20 min)** | `bundled_panoramic_cloud_front_14f` (`n=5`) | Pers vs Linear vs OF vs Hybrid | Pers `54.58%` · Lin `23.69%` (`+0.57`) · OF `43.98%` (`+0.19`) · Hybrid `37.66%` (`+0.31`) |
 
-Run on your own hardware and real chronological SQLite history:
+See [`docs/MODEL_CARD.md`](docs/MODEL_CARD.md) for stratified per-condition metrics and objective event precision/recall/false-alarm rates. Run on your own hardware and real chronological SQLite history:
 ```bash
-PYTHONPATH=backend python scripts/evaluate.py --datasets-dir data/datasets --json-out eval_report.json
+PYTHONPATH=backend python scripts/evaluate.py --datasets-dir data/datasets --json-out eval_report.json --md-out eval_report.md
 PYTHONPATH=backend python scripts/evaluate_nowcast.py --from-db
 ```
 

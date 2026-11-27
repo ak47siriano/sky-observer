@@ -53,12 +53,47 @@ When optional Location Auto-Train runs:
 
 ---
 
-## Reproducible Benchmarks
+## Reproducible Benchmarks (Measured vs Baselines)
 
-Run the unified evaluator locally to measure metrics on your machine and datasets (no hard-coded or invented claims):
+All numbers below are generated directly by `PYTHONPATH=backend python scripts/evaluate.py` (whole-day chronological splits, zero invented claims):
+
+### 1. Segmentation (`bundled_synthetic_sky_18f`, `n=18`)
+| Method | Sky IoU | Cloud IoU | Binary mIoU | Pixel Acc | Cover MAE (%) |
+| :--- | :---: | :---: | :---: | :---: | :---: |
+| **`radiometric-physics-v1`** | 0.8444 | 0.9006 | **0.8725** | **0.9354** | **5.02** |
+| `baseline:rb_fixed` (`R/B >= 0.78`) | 0.8370 | 0.8886 | 0.8628 | 0.9291 | 7.09 |
+| `baseline:rb_otsu` (Otsu on `R/B`) | 0.7848 | 0.8903 | 0.8375 | 0.9216 | 7.78 |
+
+- **Stratified by condition**: `clear` Cover MAE `0.34%`, `overcast` Cover MAE `0.41%` (`mIoU 0.8781`), `partial` (`mIoU 0.6505` vs `rb_fixed 0.5747`, Cover MAE `17.05%`).
+
+### 2. Classification (Whole-Day Chronological Split: Train Days 1–2, Held-Out Day 3)
+| Method | Held-Out `n` | Accuracy | Macro F1 |
+| :--- | :---: | :---: | :---: |
+| **`physical-heuristic-v1`** | 6 | 0.6667 | 0.5714 |
+| `baseline:knn_12_features` | 6 | **0.8333** | **0.7778** |
+| `baseline:majority_class` | 6 | 0.1667 | 0.0476 |
+
+> *Honest note*: A simple 12-feature kNN trained on prior days outperforms the hand-tuned 11-class heuristic on held-out days, motivating both local supervised adaptation and the reduced 5-class macro taxonomy.
+
+### 3. Nowcasting (`bundled_panoramic_cloud_front_14f`, `Skill = 1 - MAE / MAE_pers`)
+| Horizon | `n` | Pers MAE (%) | Lin MAE (%) | Lin Skill | OF MAE (%) | OF Skill | Hybrid MAE (%) | Hybrid Skill |
+| :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
+| **+5 min** | 11 | 12.59 | 5.92 | `+0.5298` | 9.47 | `+0.2478` | 6.49 | `+0.4845` |
+| **+10 min** | 9 | 27.03 | 9.63 | `+0.6437` | 20.77 | `+0.2316` | 14.27 | `+0.4721` |
+| **+15 min** | 7 | 41.27 | 16.77 | `+0.5937` | 33.83 | `+0.1803` | 26.37 | `+0.3610` |
+| **+20 min** | 5 | 54.58 | 23.69 | `+0.5660` | 43.98 | `+0.1942` | 37.66 | `+0.3100` |
+
+### 4. Event Detection (Reactive Rules vs Objective Future-Window Ground Truth, 2-Day Sequence)
+| Event | Precision | Recall | False Alarms / Day |
+| :--- | :---: | :---: | :---: |
+| `rapid_increase` (`+30 pts / 30m`) | 0.0000 | 0.0000 | 1.00 |
+| `clearing` (`<20% / 15m`) | 0.5000 | 0.3333 | 1.00 |
+| `darkening` (solar-normalized) | 0.0000 | 0.0000 | 3.00 |
+
+> *Honest note*: Reactive frame-to-frame rules detect changes *after* arrival rather than forecasting them before onset; evaluate predictive lead-time on your own real camera history with `scripts/evaluate.py --save-to-registry` and `scripts/evaluate_nowcast.py --from-db`.
 
 ```bash
-PYTHONPATH=backend python scripts/evaluate.py
+PYTHONPATH=backend python scripts/evaluate.py --json-out eval_report.json --md-out eval_report.md
 PYTHONPATH=backend python scripts/evaluate_nowcast.py --from-db
 ```
 
