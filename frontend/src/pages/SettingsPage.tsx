@@ -55,6 +55,7 @@ export const SettingsPage: React.FC<{
   const [pendingPurgeTargets, setPendingPurgeTargets] = useState<string[] | null>(null);
   const [purging, setPurging] = useState(false);
   const [purgeMsg, setPurgeMsg] = useState("");
+  const [imgNonce, setImgNonce] = useState(() => Date.now());
 
   const refreshStorage = useCallback(() => {
     api.getStorageStats().then(setStorageInfo).catch(() => {});
@@ -695,12 +696,15 @@ export const SettingsPage: React.FC<{
             className="lg:col-span-2 relative aspect-video bg-[#08090B] border border-white/[0.08] rounded-xl overflow-hidden cursor-crosshair"
           >
             <img
-              src={`/api/camera/latest?layer=mask&t=${Date.now()}`}
+              src={`/api/camera/latest?layer=mask&t=${imgNonce}`}
+              onLoad={(e) => {
+                (e.currentTarget as HTMLImageElement).style.opacity = "1";
+              }}
               onError={(e) => {
-                (e.currentTarget as HTMLImageElement).style.display = "none";
+                (e.currentTarget as HTMLImageElement).style.opacity = "0.25";
               }}
               alt="Mask preview"
-              className="w-full h-full object-contain pointer-events-none"
+              className="w-full h-full object-contain pointer-events-none transition-opacity duration-200"
             />
             <svg viewBox="0 0 100 100" preserveAspectRatio="none" className="absolute inset-0 w-full h-full pointer-events-none">
               {newPolyPts.length >= 2 && (
@@ -744,8 +748,11 @@ export const SettingsPage: React.FC<{
 
         <div className="pt-4 border-t border-white/[0.07]">
           <ExclusionMaskPainter
-            imageUrl={`/api/camera/latest?layer=raw&t=${Date.now()}`}
-            onSaved={onConfigSaved}
+            imageUrl={`/api/camera/latest?layer=raw&t=${imgNonce}`}
+            onSaved={() => {
+              setImgNonce(Date.now());
+              onConfigSaved();
+            }}
           />
         </div>
       </div>

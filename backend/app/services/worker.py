@@ -306,7 +306,8 @@ class SkyObserverWorker:
         self._last_capture_ts = 0.0
         self._last_forecast_ts = 0.0
         self._last_retention_ts = 0.0
-        self._last_autotrain_check_ts = 0.0
+        # Delay initial auto-train eligibility check so startup never spikes CPU/RAM immediately
+        self._last_autotrain_check_ts = time.time()
         self._offline_alert_sent = False
 
     def start(self) -> None:

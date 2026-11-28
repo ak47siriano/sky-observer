@@ -68,6 +68,12 @@ export const SkyStage: React.FC<SkyStageProps> = ({
   const [splitPct, setSplitPct] = useState(50);
   const [draggingSplit, setDraggingSplit] = useState(false);
   const [excludeSub, setExcludeSub] = useState<"paint" | "preview">("paint");
+  const [fallbackNonce] = useState(() => Date.now());
+  const [imgRetry, setImgRetry] = useState(0);
+
+  useEffect(() => {
+    setImgRetry(0);
+  }, [obs?.id, mode]);
 
   // Embedded Timelapse state
   const [frames, setFrames] = useState<any[]>([]);
@@ -156,16 +162,24 @@ export const SkyStage: React.FC<SkyStageProps> = ({
   };
 
   const currentTl = frames[index];
-  const tsQuery = obs ? encodeURIComponent(obs.captured_at) : String(Date.now());
-  const rawImgUrl = obs ? `/api/analysis/image/${obs.id}?layer=raw&t=${tsQuery}` : `/api/camera/latest?layer=raw`;
-  const segImgUrl = obs ? `/api/analysis/image/${obs.id}?layer=segmentation&t=${tsQuery}` : null;
+  const tsQuery = obs ? encodeURIComponent(obs.captured_at) : String(fallbackNonce);
+  const retrySuffix = imgRetry > 0 ? `&r=${imgRetry}` : "";
+  const rawImgUrl = obs
+    ? `/api/analysis/image/${obs.id}?layer=raw&t=${tsQuery}${retrySuffix}`
+    : `/api/camera/latest?layer=raw&t=${fallbackNonce}${retrySuffix}`;
+  const segImgUrl = obs ? `/api/analysis/image/${obs.id}?layer=segmentation&t=${tsQuery}${retrySuffix}` : null;
   const activeLayerUrl = obs
     ? mode === "segmentation"
       ? segImgUrl
       : mode === "motion"
-      ? `/api/analysis/image/${obs.id}?layer=motion&t=${tsQuery}`
+      ? `/api/analysis/image/${obs.id}?layer=motion&t=${tsQuery}${retrySuffix}`
       : rawImgUrl
     : null;
+  const handleImgError = () => {
+    if (imgRetry < 4) {
+      window.setTimeout(() => setImgRetry((n) => n + 1), 2000 * (imgRetry + 1));
+    }
+  };
   const camGeom = (camera as any)?.geometry || null;
 
   const modes: Array<{ id: StageMode; label: string; icon: React.ComponentType<{ className?: string }> }> = [
@@ -485,9 +499,10 @@ export const SkyStage: React.FC<SkyStageProps> = ({
           >
             {mode === "compare" && obs && segImgUrl ? (
               <>
-                <img src={rawImgUrl} alt="Sky raw" className="w-full h-full object-contain pointer-events-none" />
+                <img src={rawImgUrl} onError={handleImgError} alt="Sky raw" className="w-full h-full object-contain pointer-events-none" />
                 <img
                   src={segImgUrl}
+                  onError={handleImgError}
                   alt="Sky segmentation compare"
                   style={{ clipPath: `inset(0 ${100 - splitPct}% 0 0)` }}
                   className="absolute inset-0 w-full h-full object-contain pointer-events-none"
@@ -508,7 +523,7 @@ export const SkyStage: React.FC<SkyStageProps> = ({
                 </span>
               </>
             ) : activeLayerUrl ? (
-              <img src={activeLayerUrl} alt={`Sky view ${mode}`} className="w-full h-full object-contain" />
+              <img src={activeLayerUrl} onError={handleImgError} alt={`Sky view ${mode}`} className="w-full h-full object-contain" />
             ) : (
               <div className="text-center space-y-2 p-8">
                 <Camera className="w-9 h-9 text-[#4C5260] mx-auto" />

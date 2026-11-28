@@ -592,7 +592,13 @@ class TrainingManager:
             conf_mat_payload: dict[str, Any] = {}
 
             if model_family == "segmentation":
+                # Guard low-RAM / CPU-only hosts (e.g. 4 GB Docker containers) against OOM kills:
+                # cap resolution & batch size and avoid forking DataLoader workers on CPU.
                 seg_res = max(256, min(512, cfg.vision.inference_resolution))
+                eff_batch = max(1, batch_size)
+                if device == "cpu":
+                    seg_res = min(seg_res, 256)
+                    eff_batch = min(eff_batch, 2)
                 tr_ds = _SegDataset(
                     train_items,
                     resolution=seg_res,
@@ -609,12 +615,15 @@ class TrainingManager:
                 )
                 if len(tr_ds) == 0:
                     raise ValueError("No segmented mask items available in dataset for training")
-                # On Windows, multiprocessing DataLoader spawn reloads torch\lib\shm.dll per worker
-                # inside the live Uvicorn process, exhausting virtual commit RAM; keep num_workers=0 on win32.
-                n_workers = 0 if sys.platform == "win32" else (int(getattr(cfg.ai, "dataloader_num_workers", 2) or 0) if len(tr_ds) >= 64 else 0)
+                # Never fork multiprocessing DataLoader workers on win32 or CPU-only containers (prevents RSS multiplication & OOM).
+                n_workers = (
+                    0
+                    if (sys.platform == "win32" or device == "cpu")
+                    else (int(getattr(cfg.ai, "dataloader_num_workers", 2) or 0) if len(tr_ds) >= 64 else 0)
+                )
                 pin_mem = device == "cuda"
-                tr_loader = DataLoader(tr_ds, batch_size=max(1, batch_size), shuffle=True, num_workers=n_workers, pin_memory=pin_mem)
-                va_loader = DataLoader(va_ds, batch_size=max(1, batch_size), shuffle=False, num_workers=n_workers, pin_memory=pin_mem)
+                tr_loader = DataLoader(tr_ds, batch_size=eff_batch, shuffle=True, num_workers=n_workers, pin_memory=pin_mem)
+                va_loader = DataLoader(va_ds, batch_size=eff_batch, shuffle=False, num_workers=n_workers, pin_memory=pin_mem)
                 criterion = _FocalDiceSegLoss(ignore_index=NOT_SKY_IGNORE_INDEX, gamma=1.5)
                 num_seg_classes = 2 if seg_binary_phase else 5
 
@@ -713,10 +722,15 @@ class TrainingManager:
                 weights = np.where(counts > 0, len(tr_ds) / (np.maximum(counts, 1) * np.count_nonzero(counts)), 1.0)
                 criterion = nn.CrossEntropyLoss(weight=torch.tensor(weights, dtype=torch.float32, device=torch_dev))
 
-                n_workers = 0 if sys.platform == "win32" else (int(getattr(cfg.ai, "dataloader_num_workers", 2) or 0) if len(tr_ds) >= 128 else 0)
+                eff_cls_batch = min(max(1, batch_size), 8) if device == "cpu" else max(1, batch_size)
+                n_workers = (
+                    0
+                    if (sys.platform == "win32" or device == "cpu")
+                    else (int(getattr(cfg.ai, "dataloader_num_workers", 2) or 0) if len(tr_ds) >= 128 else 0)
+                )
                 pin_mem = device == "cuda"
-                tr_loader = DataLoader(tr_ds, batch_size=max(1, batch_size), shuffle=True, num_workers=n_workers, pin_memory=pin_mem)
-                va_loader = DataLoader(va_ds, batch_size=max(1, batch_size), shuffle=False, num_workers=n_workers, pin_memory=pin_mem)
+                tr_loader = DataLoader(tr_ds, batch_size=eff_cls_batch, shuffle=True, num_workers=n_workers, pin_memory=pin_mem)
+                va_loader = DataLoader(va_ds, batch_size=eff_cls_batch, shuffle=False, num_workers=n_workers, pin_memory=pin_mem)
 
                 for epoch in range(start_epoch + 1, epochs + 1):
                     if self._should_stop(job_id):

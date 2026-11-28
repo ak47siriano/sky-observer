@@ -21,6 +21,9 @@ services:
       - SKYOBSERVER_MAX_GPU_MEMORY_FRACTION=${SKYOBSERVER_MAX_GPU_MEMORY_FRACTION:-0.85}
       - SKYOBSERVER_DATA_DIR=/data
       - SKYOBSERVER_CONFIG_PATH=/config/config.yaml
+      - OMP_NUM_THREADS=${OMP_NUM_THREADS:-2}
+      - MKL_NUM_THREADS=${MKL_NUM_THREADS:-2}
+      - OPENBLAS_NUM_THREADS=${OPENBLAS_NUM_THREADS:-2}
       - TZ=${TZ:-UTC}
     volumes:
       - skyobserver_db:/data/db

@@ -126,6 +126,7 @@ export const CameraTiltCalibrator: React.FC<Props> = ({
   const [lockAspect16x9, setLockAspect16x9] = useState(false);
   const [detecting, setDetecting] = useState(false);
   const [detectNote, setDetectNote] = useState<{ text: string; tone: "ok" | "warn" | "err" } | null>(null);
+  const [camPreviewRetry, setCamPreviewRetry] = useState(0);
 
   const elDeg = clamp(Number(value.orientation_elevation_deg ?? 65), -20, 90);
   const tiltDeg = Math.round((90 - elDeg) * 10) / 10;
@@ -1106,11 +1107,17 @@ export const CameraTiltCalibrator: React.FC<Props> = ({
           </div>
           <div className="relative aspect-video max-h-[290px] mx-auto bg-[#08090B] rounded-lg overflow-hidden border border-white/[0.08]">
             <img
-              src="/api/camera/latest?layer=raw"
+              src={camPreviewRetry > 0 ? `/api/camera/latest?layer=raw&r=${camPreviewRetry}` : "/api/camera/latest?layer=raw"}
               alt="Live camera calibration feed"
-              className="w-full h-full object-contain"
+              className="w-full h-full object-contain transition-opacity duration-200"
+              onLoad={(e) => {
+                (e.currentTarget as HTMLImageElement).style.opacity = "1";
+              }}
               onError={(e) => {
-                (e.currentTarget as HTMLImageElement).style.opacity = "0.15";
+                (e.currentTarget as HTMLImageElement).style.opacity = "0.25";
+                if (camPreviewRetry < 3) {
+                  window.setTimeout(() => setCamPreviewRetry((n) => n + 1), 2500);
+                }
               }}
             />
             <SkyHorizonOverlay

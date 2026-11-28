@@ -836,13 +836,26 @@ class AutoLearnManager:
     def maybe_trigger_scheduled(self, config: AppConfig) -> bool:
         if not config.ai.auto_train.enabled or not config.ai.training_enabled:
             return False
+        interval_sec = float(config.ai.auto_train.interval_minutes) * 60.0
         with self._lock:
             if self._running or get_training_manager().has_active_jobs():
                 return False
-            if (time.time() - self._last_run_ts) < float(config.ai.auto_train.interval_minutes) * 60.0:
+            if (time.time() - self._last_run_ts) < interval_sec:
                 return False
 
+        # Persist cooldown across process restarts / prior OOM crashes by checking latest TrainingSession in DB
         with get_db_session() as db:
+            last_sess = db.query(TrainingSession).order_by(TrainingSession.id.desc()).first()
+            if last_sess is not None and last_sess.started_at is not None:
+                started = last_sess.started_at
+                if started.tzinfo is None:
+                    started = started.replace(tzinfo=UTC)
+                age_sec = (datetime.now(UTC) - started).total_seconds()
+                if age_sec < interval_sec:
+                    with self._lock:
+                        self._last_run_ts = time.time() - max(0.0, age_sec)
+                    return False
+
             rows = (
                 db.query(Observation)
                 .filter(

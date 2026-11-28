@@ -179,6 +179,20 @@ async def lifespan(_app: FastAPI):
     cfg.ensure_directories()
     init_database(cfg.db_path)
     with get_db_session() as db:
+        # Clean up any stale training sessions left in 'running'/'queued' after an abrupt restart/OOM
+        stale_sessions = (
+            db.query(TrainingSession)
+            .filter(TrainingSession.status.in_(["running", "queued"]))
+            .all()
+        )
+        if stale_sessions:
+            now_utc = datetime.now(UTC)
+            for s in stale_sessions:
+                s.status = "interrupted"
+                s.completed_at = now_utc
+                if not s.error_message:
+                    s.error_message = "Interrupted by process restart or memory limit."
+            db.commit()
         get_model_cache().refresh_from_db(db)
     try:
         get_broadcaster().set_loop(asyncio.get_running_loop())

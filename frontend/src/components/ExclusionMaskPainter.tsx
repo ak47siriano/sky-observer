@@ -228,11 +228,14 @@ export const ExclusionMaskPainter: React.FC<Props> = ({ imageUrl, onSaved }) => 
       <div className="relative aspect-video bg-[#08090B] border border-white/[0.08] rounded-xl overflow-hidden">
         <img
           src={imageUrl}
+          onLoad={(e) => {
+            (e.currentTarget as HTMLImageElement).style.opacity = "1";
+          }}
           onError={(e) => {
-            (e.currentTarget as HTMLImageElement).style.display = "none";
+            (e.currentTarget as HTMLImageElement).style.opacity = "0.25";
           }}
           alt="Exclusion paint canvas"
-          className="w-full h-full object-contain select-none pointer-events-none"
+          className="w-full h-full object-contain select-none pointer-events-none transition-opacity duration-200"
         />
         <canvas
           ref={canvasRef}
