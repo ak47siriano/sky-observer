@@ -97,7 +97,11 @@ def test_rainviewer_past_only_attribution_and_librewxr_provider(isolated_env):
         rv = svc.get_radar_layers(isolated_env)
     assert rv is not None
     assert rv["max_zoom"] == 7
-    assert rv["attribution_url"].startswith("https://www.rainviewer.com")
+    from urllib.parse import urlparse
+
+    parsed_attr = urlparse(rv["attribution_url"])
+    assert parsed_attr.scheme == "https"
+    assert parsed_attr.hostname == "www.rainviewer.com"
     assert len(rv["radar_frames"]) == 1
     assert rv["radar_frames"][0]["kind"] == "radar_past"
     assert "abc123hash" in rv["radar_frames"][0]["tile_url"]
