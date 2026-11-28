@@ -2,9 +2,9 @@
 
 Self-hosted application that estimates cloud cover from a sky-facing camera, projects it onto a geographic cloud map, and produces short-term (5–20 min camera-only, up to 60 min with optional NWP) cloud cover nowcasts.
 
-[![CI](https://github.com/ak47siriano/sky-observer/actions/workflows/ci.yml/badge.svg)](https://github.com/ak47siriano/sky-observer/actions/workflows/ci.yml)
+[![CI](https://github.com/AymenK2003/sky-observer/actions/workflows/ci.yml/badge.svg)](https://github.com/AymenK2003/sky-observer/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![Latest Release](https://img.shields.io/github/v/release/ak47siriano/sky-observer?include_prereleases)](https://github.com/ak47siriano/sky-observer/releases)
+[![Latest Release](https://img.shields.io/github/v/release/AymenK2003/sky-observer?include_prereleases)](https://github.com/AymenK2003/sky-observer/releases)
 [![Python 3.11+](https://img.shields.io/badge/Python-3.11%2B-3776AB)](pyproject.toml)
 
 [English](README.md) · [Italiano](README.it.md)
