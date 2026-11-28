@@ -275,10 +275,16 @@ def generate_forecasts_for_observation(
             of_w = float(np.clip(float(latest_obs.motion_consistency) * 0.55 * (1.0 - 0.5 * fov_exit), 0.15, 0.50))
             rule_proj_cov = float(np.clip((1.0 - of_w) * rule_proj_cov + of_w * float(of_cov), 0.0, 100.0))
 
-        # Blend with TemporalSkyConvGRU if available
+        # Blend with TemporalSkyConvGRU if available — keep short horizons anchored to local physics/advection
+        # so an uncalibrated or synthetic neural checkpoint cannot drag a steady +5m sky off by 20%+.
         if nn_horizon_preds is not None and idx < nn_horizon_preds.shape[0]:
             nn_cov = float(1.0 / (1.0 + np.exp(-nn_horizon_preds[idx, 0])) * 100.0)
-            proj_cov = float(np.clip(0.60 * rule_proj_cov + 0.40 * nn_cov, 0.0, 100.0))
+            nn_w = {5: 0.12, 15: 0.22, 20: 0.28, 30: 0.32, 60: 0.35}.get(h_min, 0.25)
+            h_stat_pre = hist_by_horizon.get(str(h_min), {})
+            prev_skill = h_stat_pre.get("skill_vs_persistence")
+            if h_stat_pre.get("count", 0) >= 15 and (prev_skill is None or float(prev_skill) < 0.0):
+                nn_w *= 0.35
+            proj_cov = float(np.clip((1.0 - nn_w) * rule_proj_cov + nn_w * nn_cov, 0.0, 100.0))
             nn_probs = 1.0 / (1.0 + np.exp(-np.clip(nn_horizon_preds[idx, 1:], -12.0, 12.0)))
         else:
             proj_cov = rule_proj_cov
@@ -289,9 +295,12 @@ def generate_forecasts_for_observation(
         if online_data is not None:
             o_h = online_data.get("horizons", {}).get(h_min) or online_data.get("horizons", {}).get(str(h_min))
             if o_h and o_h.get("cloud_cover_pct") is not None:
-                # Camera dominates at +5m, regional NWP weight increases smoothly toward +60m
+                # Camera + optical flow dominate +5m/+15m; coarse hourly NWP weight rises toward +30m/+60m
                 w_max = float(config.online_weather.fusion_weight_online)
-                w_h = w_max * min(1.0, 0.35 + (h_min / 60.0) * 0.65)
+                horizon_ramp = {5: 0.08, 15: 0.25, 20: 0.38, 30: 0.60, 60: 1.0}.get(
+                    h_min, min(1.0, max(0.08, h_min / 60.0))
+                )
+                w_h = w_max * horizon_ramp
                 proj_cov = float(np.clip((1.0 - w_h) * proj_cov + w_h * float(o_h["cloud_cover_pct"]), 0.0, 100.0))
                 if o_h.get("precip_probability_pct") is not None:
                     online_pprob = float(o_h["precip_probability_pct"]) / 100.0

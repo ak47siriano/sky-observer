@@ -31,7 +31,8 @@ def compute_forecast_skill(model_mae: float, persistence_mae: float) -> float | 
     if not math.isfinite(model_mae) or not math.isfinite(persistence_mae):
         return None
     if persistence_mae <= 1e-6:
-        return 0.0 if model_mae <= 1e-6 else -1.0
+        # On a completely static sky (persistence MAE = 0%), division by zero is undefined
+        return 0.0 if model_mae <= 1e-6 else None
     return round(float(1.0 - (model_mae / persistence_mae)), 4)
 
 

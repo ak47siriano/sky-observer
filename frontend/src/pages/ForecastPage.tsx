@@ -6,23 +6,29 @@ import { api } from "../services/api";
 import type { ForecastItem } from "../types/api";
 
 export const ForecastPage: React.FC<{ forecasts: ForecastItem[] }> = ({ forecasts }) => {
-  const { t, tEnum } = useI18n();
+  const { t, tEnum, locale } = useI18n();
+  const isIt = locale === "it";
   const [verification, setVerification] = useState<any>(null);
   const [history, setHistory] = useState<ForecastItem[]>([]);
   const [advHorizon, setAdvHorizon] = useState<number>(15);
-  const [advNonce, setAdvNonce] = useState<number>(0);
+  const [advNonce, setAdvNonce] = useState<number>(() => Date.now());
+  const [advErr, setAdvErr] = useState(false);
 
   useEffect(() => {
     api.getForecastVerification().then(setVerification).catch(() => {});
     api.getForecastHistory(40).then((d) => setHistory(d.items || [])).catch(() => {});
     setAdvNonce(Date.now());
+    setAdvErr(false);
   }, [forecasts]);
 
   const formatSkill = (s: number | null | undefined) => {
-    if (s == null || Number.isNaN(Number(s))) return "—";
+    if (s == null || Number.isNaN(Number(s))) return isIt ? "N/D" : "N/A";
     const pct = Number(s) * 100;
     return `${pct >= 0 ? "+" : ""}${pct.toFixed(1)}%`;
   };
+
+  const selectedAdvFc =
+    forecasts.find((f) => f.horizon_minutes === advHorizon) || forecasts[0] || null;
 
   return (
     <div className="space-y-4">
@@ -142,7 +148,10 @@ export const ForecastPage: React.FC<{ forecasts: ForecastItem[] }> = ({ forecast
                     <button
                       key={h}
                       type="button"
-                      onClick={() => setAdvHorizon(h)}
+                      onClick={() => {
+                        setAdvHorizon(h);
+                        setAdvErr(false);
+                      }}
                       className={`px-2 py-0.5 rounded text-[10px] font-mono transition ${
                         advHorizon === h
                           ? "bg-sky-500/20 text-sky-300 border border-sky-500/40"
@@ -154,14 +163,52 @@ export const ForecastPage: React.FC<{ forecasts: ForecastItem[] }> = ({ forecast
                   ))}
                 </div>
               </div>
-              <img
-                src={`/api/forecast/advected-mask.png?horizon=${advHorizon}&t=${advNonce}`}
-                alt="Advected cloud probability map"
-                className="w-full max-h-44 object-contain rounded bg-[#08090B] border border-white/[0.08]"
-                onError={(e) => {
-                  (e.currentTarget as HTMLImageElement).style.display = "none";
-                }}
-              />
+              <div className="relative aspect-video w-full rounded-lg overflow-hidden bg-[#08090B] border border-white/[0.08]">
+                <img
+                  src={`/api/camera/latest?layer=raw&t=${advNonce}`}
+                  alt="Sky background frame"
+                  className="w-full h-full object-contain opacity-55 select-none pointer-events-none"
+                />
+                {!advErr && (
+                  <img
+                    src={`/api/forecast/advected-mask.png?horizon=${advHorizon}&t=${advNonce}`}
+                    alt="Advected cloud probability map"
+                    className="absolute inset-0 w-full h-full object-contain transition-opacity duration-200 pointer-events-none"
+                    onLoad={(e) => {
+                      (e.currentTarget as HTMLImageElement).style.opacity = "0.88";
+                    }}
+                    onError={() => setAdvErr(true)}
+                  />
+                )}
+                <div className="absolute top-2 left-2 px-2 py-0.5 rounded bg-black/70 border border-white/10 text-[10px] font-mono text-sky-200">
+                  +{advHorizon}m ·{" "}
+                  {selectedAdvFc?.baselines?.optical_flow_cover_pct != null
+                    ? `${Number(selectedAdvFc.baselines.optical_flow_cover_pct).toFixed(0)}% OF`
+                    : `${selectedAdvFc?.cloud_cover_prediction?.toFixed(0) ?? "—"}%`}
+                  {selectedAdvFc?.baselines?.fov_exit_fraction != null
+                    ? ` · FOV exit ${(Number(selectedAdvFc.baselines.fov_exit_fraction) * 100).toFixed(0)}%`
+                    : ""}
+                </div>
+              </div>
+              <div className="flex flex-wrap items-center justify-between gap-2 text-[10px] font-mono text-[#8E95A2]">
+                <div className="flex items-center gap-2">
+                  <span>{isIt ? "Prob. nube:" : "Cloud prob:"}</span>
+                  <span className="inline-flex items-center gap-1">
+                    <span className="w-2.5 h-2.5 rounded-sm bg-[#38BDF8]" /> 20%
+                  </span>
+                  <span className="inline-flex items-center gap-1">
+                    <span className="w-2.5 h-2.5 rounded-sm bg-[#F8FAFC]" /> 50%
+                  </span>
+                  <span className="inline-flex items-center gap-1">
+                    <span className="w-2.5 h-2.5 rounded-sm bg-[#C378EB]" /> 100%
+                  </span>
+                </div>
+                {selectedAdvFc?.cover_p10 != null && selectedAdvFc?.cover_p90 != null && (
+                  <span>
+                    p10–p90: {Number(selectedAdvFc.cover_p10).toFixed(0)}–{Number(selectedAdvFc.cover_p90).toFixed(0)}%
+                  </span>
+                )}
+              </div>
             </div>
           )}
         </div>
@@ -220,6 +267,14 @@ export const ForecastPage: React.FC<{ forecasts: ForecastItem[] }> = ({ forecast
                   <div className="font-mono tabular-nums font-bold text-amber-300 mt-0.5">{verification.overall.brier_score}</div>
                 </div>
               </div>
+
+              {verification.overall.persistence_mae_pct === 0 && (
+                <div className="px-3 py-2 rounded-lg bg-amber-500/10 border border-amber-400/25 text-[11px] text-amber-200/90">
+                  {isIt
+                    ? "Cielo rimasto statico durante queste verifiche (MAE persistenza = 0%): lo skill relativo alla persistenza è N/D finché la copertura nuvolosa non varia."
+                    : "Sky remained static across verified samples (persistence MAE = 0%): skill vs persistence is N/A until cloud cover changes."}
+                </div>
+              )}
 
               {verification.by_horizon && Object.keys(verification.by_horizon).length > 0 && (
                 <div>
