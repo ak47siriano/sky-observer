@@ -158,6 +158,10 @@ class ForecastConfig(BaseModel):
     rules: ForecastRulesConfig = Field(default_factory=ForecastRulesConfig)
 
 
+def _default_autotrain_families() -> list[Literal["segmentation", "classification", "temporal", "event"]]:
+    return ["segmentation", "classification", "temporal"]
+
+
 class AutoTrainConfig(BaseModel):
     enabled: bool = False
     interval_minutes: int = Field(default=60, ge=5, le=1440)
@@ -168,7 +172,7 @@ class AutoTrainConfig(BaseModel):
     epochs: int = Field(default=3, ge=1, le=30)
     learning_rate: float = Field(default=0.0005, gt=0.0, le=0.1)
     families: list[Literal["segmentation", "classification", "temporal", "event"]] = Field(
-        default_factory=lambda: ["segmentation", "classification", "temporal"]
+        default_factory=_default_autotrain_families
     )
     warm_start: bool = True
     fixed_holdout_fraction: float = Field(default=0.20, ge=0.05, le=0.50)

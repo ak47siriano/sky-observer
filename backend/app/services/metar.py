@@ -113,8 +113,10 @@ def fetch_nearest_metar(
 
         # Choose geographically closest station
         def _dist2(r: dict[str, Any]) -> float:
-            rlat = float(r.get("lat") if r.get("lat") is not None else lat + 99.0)
-            rlon = float(r.get("lon") if r.get("lon") is not None else lon + 99.0)
+            raw_lat = r.get("lat")
+            raw_lon = r.get("lon")
+            rlat = float(raw_lat) if raw_lat is not None else lat + 99.0
+            rlon = float(raw_lon) if raw_lon is not None else lon + 99.0
             return (rlat - lat) ** 2 + (rlon - lon) ** 2
 
         best = min(rows, key=_dist2)
